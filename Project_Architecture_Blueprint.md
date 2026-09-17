@@ -87,7 +87,7 @@ Router → Cliente: response HTTP (schema de salida)
 
 ### `app/config.py` — Settings
 `BaseSettings` (pydantic-settings) lee variables de entorno. `get_settings()` está cacheado con
-`lru_cache`. Contiene URLs base de los microservicios (p. ej. `service_a_base_url`) y el timeout HTTP.
+`lru_cache`. Contiene URLs base de los microservicios (p. ej. `pdf_extract_base_url`) y el timeout HTTP.
 **Nunca** valores hardcodeados fuera de aquí.
 
 ### `app/dependencies.py` — Inyección de dependencias

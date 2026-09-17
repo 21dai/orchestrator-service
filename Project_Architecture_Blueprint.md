@@ -178,3 +178,4 @@ Para agregar una operación orquestada (p. ej. "obtener resumen de pedido"):
 | Resiliencia centralizada en `BaseClient` | Retry/Circuit Breaker uniformes para todos los servicios | Un solo lugar para política de resiliencia |
 | `TestClient` para integración | Validar wiring sin servidor real | Tests rápidos deterministas |
 | Tests de sistema opt-in (`RUN_SYSTEM_TESTS`) | Requieren servicios reales | CI no falla por entorno no disponible |
+| PDF como `bytes` en memoria ([ADR-0001](docs/decisions/0001-representacion-interna-del-pdf.md)) | El hoja espera multipart; máximo 10 MB; sin estado | Sin Base64 ni streams; `PdfDocument` inmutable circula service → client |

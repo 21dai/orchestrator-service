@@ -16,6 +16,8 @@ Regla de dependencias: **Router → Service → Client**. La inyección se reali
 
 Los clientes heredan de `app/clients/base_client.py`, punto de extensión donde se aplicarán los patrones de resiliencia (Retry, Circuit Breaker, Bulkhead).
 
+Las decisiones de diseño se registran como ADRs en [`docs/decisions/`](docs/decisions/).
+
 ## Requisitos
 
 - [uv](https://docs.astral.sh/uv/)

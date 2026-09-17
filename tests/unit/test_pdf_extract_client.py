@@ -100,6 +100,20 @@ async def test_create_document_traduce_400_a_rechazo_con_el_detalle() -> None:
 
 
 @respx.mock
+async def test_create_document_usa_el_body_crudo_si_el_detalle_no_es_texto() -> None:
+    # Los 422 de FastAPI traen `detail` como lista, no como string.
+    respx.post(DOCUMENTS_URL).mock(
+        return_value=httpx.Response(
+            422, json={"detail": [{"loc": ["body", "file"], "msg": "campo requerido"}]}
+        )
+    )
+
+    async with PdfExtractClient(base_url=BASE_URL, timeout_seconds=5) as client:
+        with pytest.raises(PdfExtractRejectedError, match="campo requerido"):
+            await client.create_document(make_document(), name="informe")
+
+
+@respx.mock
 async def test_create_document_traduce_5xx_a_respuesta_inesperada() -> None:
     respx.post(DOCUMENTS_URL).mock(return_value=httpx.Response(500, text="boom"))
 

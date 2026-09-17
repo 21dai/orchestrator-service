@@ -46,3 +46,10 @@ async def test_load_pdf_rechaza_un_archivo_invalido() -> None:
 
     with pytest.raises(InvalidPdfError):
         await load_pdf(upload)
+
+
+async def test_load_pdf_rechaza_un_upload_sin_nombre() -> None:
+    upload = UploadFile(file=BytesIO(PDF_CONTENT))
+
+    with pytest.raises(InvalidPdfError):
+        await load_pdf(upload)

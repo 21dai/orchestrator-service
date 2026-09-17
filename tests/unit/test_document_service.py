@@ -81,6 +81,15 @@ async def test_process_pdf_ignora_un_nombre_vacio() -> None:
     assert client.calls[0][1] == "informe"
 
 
+async def test_process_pdf_normaliza_el_nombre_quitando_espacios() -> None:
+    client = StubPdfExtractClient(make_extracted())
+    service = DocumentService(pdf_extract_client=client)
+
+    await service.process_pdf(make_document(), name="  mi informe  ")
+
+    assert client.calls[0][1] == "mi informe"
+
+
 async def test_process_pdf_propaga_los_errores_del_client() -> None:
     client = StubPdfExtractClient(PdfExtractRejectedError("checksum duplicado"))
     service = DocumentService(pdf_extract_client=client)

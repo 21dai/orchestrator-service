@@ -6,9 +6,6 @@ import respx
 from fastapi.testclient import TestClient
 
 from app.config import get_settings
-from app.main import app
-
-client = TestClient(app)
 
 PDF_CONTENT = b"%PDF-1.4\n%contenido de prueba"
 DOCUMENTS_URL = f"{get_settings().pdf_extract_base_url}/api/v1/documents"
@@ -26,7 +23,7 @@ EXTRACT_RESPONSE = {
 }
 
 
-def post_pdf(**form: str) -> httpx.Response:
+def post_pdf(client: TestClient, **form: str) -> httpx.Response:
     return client.post(
         "/api/v1/documents",
         data=form,
@@ -35,10 +32,12 @@ def post_pdf(**form: str) -> httpx.Response:
 
 
 @respx.mock
-def test_post_documents_orquesta_la_extraccion_y_devuelve_el_resultado() -> None:
+def test_post_documents_orquesta_la_extraccion_y_devuelve_el_resultado(
+    client: TestClient,
+) -> None:
     route = respx.post(DOCUMENTS_URL).mock(return_value=httpx.Response(201, json=EXTRACT_RESPONSE))
 
-    response = post_pdf(name="informe")
+    response = post_pdf(client, name="informe")
 
     assert route.called
     assert response.status_code == 201
@@ -55,22 +54,32 @@ def test_post_documents_orquesta_la_extraccion_y_devuelve_el_resultado() -> None
 
 
 @respx.mock
-def test_post_documents_sin_nombre_usa_el_nombre_del_archivo() -> None:
+def test_post_documents_sin_nombre_usa_el_nombre_del_archivo(client: TestClient) -> None:
     route = respx.post(DOCUMENTS_URL).mock(return_value=httpx.Response(201, json=EXTRACT_RESPONSE))
 
-    response = post_pdf()
+    response = post_pdf(client)
 
     assert response.status_code == 201
     assert b'name="name"\r\n\r\ninforme' in route.calls.last.request.content
 
 
-def test_post_documents_sin_archivo_devuelve_422() -> None:
+@respx.mock
+def test_post_documents_envia_el_nombre_normalizado_sin_espacios(client: TestClient) -> None:
+    route = respx.post(DOCUMENTS_URL).mock(return_value=httpx.Response(201, json=EXTRACT_RESPONSE))
+
+    response = post_pdf(client, name="  informe final  ")
+
+    assert response.status_code == 201
+    assert b'name="name"\r\n\r\ninforme final' in route.calls.last.request.content
+
+
+def test_post_documents_sin_archivo_devuelve_422(client: TestClient) -> None:
     response = client.post("/api/v1/documents")
 
     assert response.status_code == 422
 
 
-def test_post_documents_rechaza_archivo_no_pdf_con_problem_details() -> None:
+def test_post_documents_rechaza_archivo_no_pdf_con_problem_details(client: TestClient) -> None:
     response = client.post(
         "/api/v1/documents",
         files={"file": ("notas.txt", b"texto plano", "text/plain")},
@@ -86,7 +95,7 @@ def test_post_documents_rechaza_archivo_no_pdf_con_problem_details() -> None:
     assert body["instance"].endswith("/api/v1/documents")
 
 
-def test_post_documents_rechaza_pdf_con_contenido_invalido() -> None:
+def test_post_documents_rechaza_pdf_con_contenido_invalido(client: TestClient) -> None:
     response = client.post(
         "/api/v1/documents",
         files={"file": ("falso.pdf", b"no soy un pdf", "application/pdf")},
@@ -97,17 +106,40 @@ def test_post_documents_rechaza_pdf_con_contenido_invalido() -> None:
 
 
 @respx.mock
-def test_post_documents_propaga_el_rechazo_de_pdf_extractext() -> None:
+def test_post_documents_propaga_el_rechazo_de_pdf_extractext(client: TestClient) -> None:
     respx.post(DOCUMENTS_URL).mock(
         return_value=httpx.Response(
             400, json={"detail": "Ya existe un documento con el mismo checksum"}
         )
     )
 
-    response = post_pdf(name="informe")
+    response = post_pdf(client, name="informe")
 
     assert response.status_code == 400
     assert response.json()["detail"] == "Ya existe un documento con el mismo checksum"
+
+
+@respx.mock
+def test_post_documents_informa_un_5xx_de_pdf_extractext(client: TestClient) -> None:
+    respx.post(DOCUMENTS_URL).mock(return_value=httpx.Response(500, text="boom"))
+
+    response = post_pdf(client, name="informe")
+
+    assert response.status_code == 502
+    assert response.headers["content-type"] == "application/problem+json"
+    assert "500" in response.json()["detail"]
+
+
+@respx.mock
+def test_post_documents_informa_una_respuesta_invalida_de_pdf_extractext(
+    client: TestClient,
+) -> None:
+    respx.post(DOCUMENTS_URL).mock(return_value=httpx.Response(201, json={"id": "x"}))
+
+    response = post_pdf(client, name="informe")
+
+    assert response.status_code == 502
+    assert response.headers["content-type"] == "application/problem+json"
 
 
 @pytest.mark.parametrize(
@@ -116,11 +148,11 @@ def test_post_documents_propaga_el_rechazo_de_pdf_extractext() -> None:
 )
 @respx.mock
 def test_post_documents_informa_fallos_de_pdf_extractext(
-    side_effect: type[Exception], expected_status: int
+    client: TestClient, side_effect: type[Exception], expected_status: int
 ) -> None:
     respx.post(DOCUMENTS_URL).mock(side_effect=side_effect)
 
-    response = post_pdf(name="informe")
+    response = post_pdf(client, name="informe")
 
     assert response.status_code == expected_status
     assert response.headers["content-type"] == "application/problem+json"

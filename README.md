@@ -34,9 +34,27 @@ Documentación interactiva: `http://localhost:8000/docs`
 ## Tests
 
 ```bash
-uv run pytest                    # tests unitarios e integración
-uv run pytest tests/system       # tests de sistema (requieren servicios)
+uv run pytest                    # unitarios e integración (exige cobertura >= 90%)
 ```
+
+### Tests de sistema (opt-in)
+
+Validan el flujo end-to-end contra el stack real desplegado
+(Traefik + orchestrator + pdf-extractext + MongoDB):
+
+```bash
+cd ../infrastructure && docker compose up -d --build  # levantar el stack
+```
+
+```bash
+# bash
+RUN_SYSTEM_TESTS=1 uv run pytest tests/system -o addopts=""
+# PowerShell
+$env:RUN_SYSTEM_TESTS=1; uv run pytest tests/system -o addopts=""
+```
+
+`ORCHESTRATOR_BASE_URL` apunta a otro despliegue (default: `https://orchestrator.proyecto.localhost`).
+`-o addopts=""` evita que el umbral de cobertura de la suite regular aplique a estos tests.
 
 ## Docker
 

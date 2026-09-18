@@ -77,6 +77,13 @@ def test_post_documents_sin_archivo_devuelve_422(client: TestClient) -> None:
     response = client.post("/api/v1/documents")
 
     assert response.status_code == 422
+    assert response.headers["content-type"] == "application/problem+json"
+    body = response.json()
+    assert body["status"] == 422
+    assert body["type"] == "about:blank"
+    assert body["title"] == "Unprocessable Content"
+    assert body["detail"]
+    assert body["instance"].endswith("/api/v1/documents")
 
 
 def test_post_documents_rechaza_archivo_no_pdf_con_problem_details(client: TestClient) -> None:

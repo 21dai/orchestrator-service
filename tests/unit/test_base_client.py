@@ -21,6 +21,16 @@ async def test_base_client_configures_base_url_and_timeout() -> None:
     await client.aclose()
 
 
+async def test_base_client_acepta_un_timeout_de_conexion_mas_corto() -> None:
+    client = BaseClient(base_url=BASE_URL, timeout_seconds=10, connect_timeout_seconds=3)
+
+    assert client._client.timeout == httpx.Timeout(10, connect=3)
+    assert client._client.timeout.connect == 3
+    assert client._client.timeout.read == 10
+
+    await client.aclose()
+
+
 @respx.mock
 async def test_request_resuelve_el_path_contra_la_base_url() -> None:
     route = respx.get(f"{BASE_URL}/health").mock(

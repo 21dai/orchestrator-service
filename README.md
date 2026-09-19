@@ -113,7 +113,7 @@ Todos los errores se devuelven como **RFC 9457 Problem Details**
 | `400` | pdf-extractext lo rechazó (p. ej. "Ya existe un documento con el mismo checksum"); se reenvía su `detail` | `PdfExtractRejectedError` |
 | `422` | Falta el campo `file` u otro error de validación de la request | — |
 | `502` | pdf-extractext respondió 5xx o un cuerpo que no se puede interpretar | `PdfExtractUnexpectedResponseError` |
-| `503` | No se pudo conectar con pdf-extractext (tras agotar los reintentos) | `PdfExtractUnavailableError` |
+| `503` | No se pudo conectar con pdf-extractext, o la conexión no se estableció a tiempo (tras agotar los reintentos) | `PdfExtractUnavailableError` |
 | `503` | Circuit Breaker abierto: pdf-extractext deshabilitado temporalmente por fallos repetidos | `PdfExtractCircuitOpenError` |
 | `503` | Bulkhead lleno: demasiadas solicitudes en curso hacia pdf-extractext | `PdfExtractOverloadedError` |
 | `504` | pdf-extractext no respondió dentro del timeout | `PdfExtractTimeoutError` |
@@ -131,7 +131,8 @@ Las variables desconocidas se ignoran.
 | `APP_NAME` | `orchestrator-service` | Nombre de la app (título de Swagger) |
 | `ENVIRONMENT` | `local` | Entorno de ejecución |
 | `PDF_EXTRACT_BASE_URL` | `http://localhost:8000` | URL base de pdf-extractext. En Docker: `http://pdf-extractext:8000` (nombre de servicio) |
-| `HTTP_TIMEOUT_SECONDS` | `10` | Timeout de cada llamada HTTP saliente. Un PDF de 279 páginas tarda ~1,6 s en pdf-extractext |
+| `HTTP_TIMEOUT_SECONDS` | `10` | Timeout de lectura/escritura de cada llamada saliente. Un PDF de 279 páginas tarda ~1,6 s en pdf-extractext |
+| `HTTP_CONNECT_TIMEOUT_SECONDS` | `2` | Timeout solo para conectar: más corto, para fallar rápido si pdf-extractext está caído |
 | `RETRY_MAX_ATTEMPTS` | `3` | Intentos máximos por llamada, contando el primero |
 | `RETRY_BACKOFF_SECONDS` | `0.2` | Base de la espera exponencial entre reintentos |
 | `RETRY_MAX_BACKOFF_SECONDS` | `2.0` | Tope de esa espera |

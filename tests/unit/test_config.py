@@ -53,3 +53,9 @@ def test_settings_tiene_defaults_de_bulkhead() -> None:
     assert settings.bulkhead_max_concurrent == 5
     assert settings.bulkhead_max_waiting == 10
     assert settings.bulkhead_acquire_timeout_seconds == 5.0
+
+
+def test_settings_tiene_timeout_de_conexion_separado() -> None:
+    settings = Settings(_env_file=None)
+
+    assert settings.http_connect_timeout_seconds == 2.0

@@ -176,3 +176,12 @@ async def test_create_document_traduce_el_bulkhead_lleno() -> None:
         ) as client:
             with pytest.raises(PdfExtractOverloadedError, match="en curso"):
                 await client.create_document(make_document(), name="informe")
+
+
+@respx.mock
+async def test_create_document_trata_el_timeout_de_conexion_como_no_disponible() -> None:
+    respx.post(DOCUMENTS_URL).mock(side_effect=httpx.ConnectTimeout("timeout"))
+
+    async with PdfExtractClient(base_url=BASE_URL, timeout_seconds=5) as client:
+        with pytest.raises(PdfExtractUnavailableError):
+            await client.create_document(make_document(), name="informe")

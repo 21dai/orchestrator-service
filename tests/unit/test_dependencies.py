@@ -55,3 +55,14 @@ async def test_get_pdf_extract_client_tiene_su_propio_bulkhead() -> None:
 
     await client.aclose()
     get_pdf_extract_client.cache_clear()
+
+
+async def test_get_pdf_extract_client_usa_los_dos_timeouts() -> None:
+    client = get_pdf_extract_client()
+    settings = get_settings()
+
+    assert client._client.timeout.connect == settings.http_connect_timeout_seconds
+    assert client._client.timeout.read == settings.http_timeout_seconds
+
+    await client.aclose()
+    get_pdf_extract_client.cache_clear()

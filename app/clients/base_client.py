@@ -27,14 +27,19 @@ class BaseClient:
         self,
         base_url: str,
         timeout_seconds: float,
+        connect_timeout_seconds: float | None = None,
         retry_policy: RetryPolicy | None = None,
         circuit_breaker: CircuitBreaker | None = None,
         bulkhead: Bulkhead | None = None,
     ) -> None:
-        self._client = httpx.AsyncClient(
-            base_url=base_url,
-            timeout=httpx.Timeout(timeout_seconds),
-        )
+        # El timeout de conexión puede ser más corto que el de lectura: si el
+        # servicio está caído conviene fallar rápido, pero un POST grande
+        # necesita tiempo para que el hoja responda. (Ojo: `connect=None` en
+        # httpx significa "sin límite", no "el default"; por eso el if.)
+        timeout = httpx.Timeout(timeout_seconds)
+        if connect_timeout_seconds is not None:
+            timeout = httpx.Timeout(timeout_seconds, connect=connect_timeout_seconds)
+        self._client = httpx.AsyncClient(base_url=base_url, timeout=timeout)
         self._retry_policy = retry_policy
         self._circuit_breaker = circuit_breaker
         self._bulkhead = bulkhead

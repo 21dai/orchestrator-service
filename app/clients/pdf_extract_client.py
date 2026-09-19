@@ -43,6 +43,9 @@ class PdfExtractClient(BaseClient):
                 "pdf-extractext está temporalmente deshabilitado por fallos repetidos; "
                 f"reintentar en {exc.retry_after_seconds:.0f} s."
             ) from exc
+        except httpx.ConnectTimeout as exc:
+            # Es un timeout, pero de conexión: el hoja no está escuchando.
+            raise PdfExtractUnavailableError("No se pudo conectar con pdf-extractext.") from exc
         except httpx.TimeoutException as exc:
             raise PdfExtractTimeoutError(
                 "pdf-extractext no respondió dentro del timeout configurado."

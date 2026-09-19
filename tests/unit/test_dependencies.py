@@ -1,4 +1,5 @@
 from app.clients.pdf_extract_client import PdfExtractClient
+from app.config import get_settings
 from app.dependencies import get_document_service, get_pdf_extract_client
 from app.services.document_service import DocumentService
 
@@ -20,4 +21,14 @@ async def test_get_pdf_extract_client_devuelve_un_singleton_cacheado() -> None:
     assert first is second
 
     await first.aclose()
+    get_pdf_extract_client.cache_clear()
+
+
+async def test_get_pdf_extract_client_aplica_la_politica_de_retry_configurada() -> None:
+    client = get_pdf_extract_client()
+
+    assert client._retry_policy is not None
+    assert client._retry_policy.max_attempts == get_settings().retry_max_attempts
+
+    await client.aclose()
     get_pdf_extract_client.cache_clear()

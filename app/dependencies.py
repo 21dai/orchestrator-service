@@ -6,10 +6,19 @@ from typing import Annotated
 from fastapi import Depends
 
 from app.clients.pdf_extract_client import PdfExtractClient
+from app.clients.retry import RetryPolicy
 from app.config import Settings, get_settings
 from app.services.document_service import DocumentService
 
 SettingsDep = Annotated[Settings, Depends(get_settings)]
+
+
+def build_retry_policy(settings: Settings) -> RetryPolicy:
+    return RetryPolicy(
+        max_attempts=settings.retry_max_attempts,
+        backoff_seconds=settings.retry_backoff_seconds,
+        max_backoff_seconds=settings.retry_max_backoff_seconds,
+    )
 
 
 @lru_cache
@@ -23,6 +32,7 @@ def get_pdf_extract_client() -> PdfExtractClient:
     return PdfExtractClient(
         base_url=settings.pdf_extract_base_url,
         timeout_seconds=settings.http_timeout_seconds,
+        retry_policy=build_retry_policy(settings),
     )
 
 

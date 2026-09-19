@@ -23,6 +23,13 @@ class Settings(BaseSettings):
     # que debe ser holgado respecto de ese valor.
     http_timeout_seconds: float = 10.0
 
+    # Retry (ver app/clients/retry.py). Solo se reintentan fallos de conexión
+    # y 5xx en métodos idempotentes: máximo de intentos (contando el primero)
+    # y espera exponencial con jitter, en segundos.
+    retry_max_attempts: int = 3
+    retry_backoff_seconds: float = 0.2
+    retry_max_backoff_seconds: float = 2.0
+
 
 @lru_cache
 def get_settings() -> Settings:

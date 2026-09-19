@@ -30,3 +30,11 @@ def test_settings_ignora_variables_desconocidas_en_el_env_file(tmp_path: Path) -
     settings = Settings(_env_file=env_file)
 
     assert settings.app_name == "orchestrator-service"
+
+
+def test_settings_tiene_defaults_de_retry() -> None:
+    settings = Settings(_env_file=None)
+
+    assert settings.retry_max_attempts == 3
+    assert settings.retry_backoff_seconds == 0.2
+    assert settings.retry_max_backoff_seconds == 2.0

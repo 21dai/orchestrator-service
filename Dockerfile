@@ -22,4 +22,7 @@ EXPOSE 8000
 
 HEALTHCHECK --interval=30s --timeout=3s CMD wget -qO- http://127.0.0.1:8000/health || exit 1
 
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# --proxy-headers: detras de Traefik (que termina TLS), tomar esquema y cliente
+# reales de X-Forwarded-*; sin esto las URLs generadas dicen http://.
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", \
+     "--proxy-headers", "--forwarded-allow-ips=*"]

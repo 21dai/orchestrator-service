@@ -3,6 +3,7 @@ from typing import Any, Self
 
 import httpx
 
+from app.clients.bulkhead import Bulkhead
 from app.clients.circuit_breaker import CircuitBreaker
 from app.clients.retry import RetryPolicy
 
@@ -28,6 +29,7 @@ class BaseClient:
         timeout_seconds: float,
         retry_policy: RetryPolicy | None = None,
         circuit_breaker: CircuitBreaker | None = None,
+        bulkhead: Bulkhead | None = None,
     ) -> None:
         self._client = httpx.AsyncClient(
             base_url=base_url,
@@ -35,6 +37,7 @@ class BaseClient:
         )
         self._retry_policy = retry_policy
         self._circuit_breaker = circuit_breaker
+        self._bulkhead = bulkhead
 
     @property
     def base_url(self) -> httpx.URL:
@@ -86,26 +89,38 @@ class BaseClient:
             attempt += 1
 
     async def _send(self, method: str, path: str, **kwargs: Any) -> httpx.Response:
-        """Un intento real de request, protegido por el Circuit Breaker.
+        """Un intento real de request, protegido por Circuit Breaker y Bulkhead.
 
-        Para el breaker cuentan como fallo las excepciones de httpx (transporte
-        y timeouts) y las respuestas 5xx; un 4xx es una respuesta válida del
-        servicio, así que cuenta como éxito. Punto de extensión para el Bulkhead.
+        Orden: primero el breaker (si el circuito está abierto se rechaza sin
+        ocupar un slot ni esperar), después el Bulkhead (acota las requests en
+        vuelo y en espera) y recién entonces la red. Para el breaker cuentan
+        como fallo las excepciones de httpx (transporte y timeouts) y las
+        respuestas 5xx; un 4xx es una respuesta válida del servicio, así que
+        cuenta como éxito. El rechazo del Bulkhead no cuenta: el hoja no falló.
         """
         breaker = self._circuit_breaker
-        if breaker is None:
-            return await self._client.request(method, path, **kwargs)
+        if breaker is not None:
+            breaker.before_request()
 
-        breaker.before_request()
+        if self._bulkhead is None:
+            return await self._send_tracked(breaker, method, path, **kwargs)
+        async with self._bulkhead.slot():
+            return await self._send_tracked(breaker, method, path, **kwargs)
+
+    async def _send_tracked(
+        self, breaker: CircuitBreaker | None, method: str, path: str, **kwargs: Any
+    ) -> httpx.Response:
         try:
             response = await self._client.request(method, path, **kwargs)
         except Exception:
-            breaker.record_failure()
+            if breaker is not None:
+                breaker.record_failure()
             raise
-        if response.is_server_error:
-            breaker.record_failure()
-        else:
-            breaker.record_success()
+        if breaker is not None:
+            if response.is_server_error:
+                breaker.record_failure()
+            else:
+                breaker.record_success()
         return response
 
     async def aclose(self) -> None:

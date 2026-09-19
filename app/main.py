@@ -4,14 +4,21 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 from app.config import get_settings
-from app.dependencies import close_pdf_extract_client
+from app.dependencies import close_pdf_extract_client, get_pdf_extract_client
 from app.errors import register_error_handlers
 from app.routers import documents, health
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-    """Ciclo de vida de la app: al apagar, cierra los clients HTTP salientes."""
+    """Ciclo de vida de la app.
+
+    Al arrancar crea los clients HTTP salientes, para que Retry, Circuit
+    Breaker y Bulkhead existan una sola vez por proceso antes de la primera
+    request (si se crearan perezosamente, varias requests simultáneas podrían
+    construir cada una su propio client). Al apagar, los cierra.
+    """
+    get_pdf_extract_client()
     yield
     await close_pdf_extract_client()
 

@@ -36,6 +36,13 @@ class Settings(BaseSettings):
     circuit_breaker_failure_threshold: int = 5
     circuit_breaker_recovery_seconds: float = 30.0
 
+    # Bulkhead (ver app/clients/bulkhead.py): requests en vuelo hacia el hoja,
+    # cuántas pueden esperar un lugar y por cuántos segundos. Peor caso en
+    # memoria por proceso: (max_concurrent + max_waiting) PDFs de hasta 10 MB.
+    bulkhead_max_concurrent: int = 5
+    bulkhead_max_waiting: int = 10
+    bulkhead_acquire_timeout_seconds: float = 5.0
+
 
 @lru_cache
 def get_settings() -> Settings:

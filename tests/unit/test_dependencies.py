@@ -45,3 +45,13 @@ async def test_get_pdf_extract_client_tiene_su_propio_circuit_breaker() -> None:
 
     await client.aclose()
     get_pdf_extract_client.cache_clear()
+
+
+async def test_get_pdf_extract_client_tiene_su_propio_bulkhead() -> None:
+    client = get_pdf_extract_client()
+
+    assert client._bulkhead is not None
+    assert client._bulkhead.max_concurrent == get_settings().bulkhead_max_concurrent
+
+    await client.aclose()
+    get_pdf_extract_client.cache_clear()

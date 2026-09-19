@@ -4,10 +4,12 @@ import httpx
 import pytest
 import respx
 
+from app.clients.bulkhead import Bulkhead
 from app.clients.circuit_breaker import CircuitBreaker
 from app.clients.pdf_extract_client import PdfExtractClient
 from app.exceptions import (
     PdfExtractCircuitOpenError,
+    PdfExtractOverloadedError,
     PdfExtractRejectedError,
     PdfExtractTimeoutError,
     PdfExtractUnavailableError,
@@ -164,3 +166,13 @@ async def test_create_document_traduce_el_circuito_abierto() -> None:
 
         with pytest.raises(PdfExtractCircuitOpenError, match="temporalmente"):
             await client.create_document(make_document(), name="informe")
+
+
+async def test_create_document_traduce_el_bulkhead_lleno() -> None:
+    bulkhead = Bulkhead(max_concurrent=1, max_waiting=0, acquire_timeout_seconds=1)
+    async with bulkhead.slot():  # alguien más ya ocupa el único slot
+        async with PdfExtractClient(
+            base_url=BASE_URL, timeout_seconds=5, bulkhead=bulkhead
+        ) as client:
+            with pytest.raises(PdfExtractOverloadedError, match="en curso"):
+                await client.create_document(make_document(), name="informe")

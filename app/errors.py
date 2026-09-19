@@ -21,6 +21,7 @@ from app.exceptions import (
     InvalidPdfError,
     OrchestratorError,
     PdfExtractCircuitOpenError,
+    PdfExtractOverloadedError,
     PdfExtractRejectedError,
     PdfExtractTimeoutError,
     PdfExtractUnavailableError,
@@ -38,6 +39,7 @@ STATUS_BY_EXCEPTION: dict[type[OrchestratorError], int] = {
     PdfExtractUnexpectedResponseError: status.HTTP_502_BAD_GATEWAY,
     PdfExtractUnavailableError: status.HTTP_503_SERVICE_UNAVAILABLE,
     PdfExtractCircuitOpenError: status.HTTP_503_SERVICE_UNAVAILABLE,
+    PdfExtractOverloadedError: status.HTTP_503_SERVICE_UNAVAILABLE,
     PdfExtractTimeoutError: status.HTTP_504_GATEWAY_TIMEOUT,
 }
 

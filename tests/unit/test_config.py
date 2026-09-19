@@ -45,3 +45,11 @@ def test_settings_tiene_defaults_de_circuit_breaker() -> None:
 
     assert settings.circuit_breaker_failure_threshold == 5
     assert settings.circuit_breaker_recovery_seconds == 30.0
+
+
+def test_settings_tiene_defaults_de_bulkhead() -> None:
+    settings = Settings(_env_file=None)
+
+    assert settings.bulkhead_max_concurrent == 5
+    assert settings.bulkhead_max_waiting == 10
+    assert settings.bulkhead_acquire_timeout_seconds == 5.0

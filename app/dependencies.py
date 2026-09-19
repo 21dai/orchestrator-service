@@ -5,6 +5,7 @@ from typing import Annotated
 
 from fastapi import Depends
 
+from app.clients.bulkhead import Bulkhead
 from app.clients.circuit_breaker import CircuitBreaker
 from app.clients.pdf_extract_client import PdfExtractClient
 from app.clients.retry import RetryPolicy
@@ -30,6 +31,15 @@ def build_circuit_breaker(settings: Settings, name: str) -> CircuitBreaker:
     )
 
 
+def build_bulkhead(settings: Settings, name: str) -> Bulkhead:
+    return Bulkhead(
+        max_concurrent=settings.bulkhead_max_concurrent,
+        max_waiting=settings.bulkhead_max_waiting,
+        acquire_timeout_seconds=settings.bulkhead_acquire_timeout_seconds,
+        name=name,
+    )
+
+
 @lru_cache
 def get_pdf_extract_client() -> PdfExtractClient:
     """Un único client (y pool de conexiones) por proceso, no por request.
@@ -43,6 +53,7 @@ def get_pdf_extract_client() -> PdfExtractClient:
         timeout_seconds=settings.http_timeout_seconds,
         retry_policy=build_retry_policy(settings),
         circuit_breaker=build_circuit_breaker(settings, name="pdf-extractext"),
+        bulkhead=build_bulkhead(settings, name="pdf-extractext"),
     )
 
 

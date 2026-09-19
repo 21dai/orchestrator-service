@@ -13,6 +13,7 @@ from app.exceptions import (
     InvalidPdfError,
     OrchestratorError,
     PdfExtractCircuitOpenError,
+    PdfExtractOverloadedError,
     PdfExtractRejectedError,
     PdfExtractTimeoutError,
     PdfExtractUnavailableError,
@@ -39,6 +40,7 @@ def make_client(exc: OrchestratorError) -> TestClient:
         (PdfExtractUnexpectedResponseError("respuesta rara"), 502),
         (PdfExtractUnavailableError("no conecta"), 503),
         (PdfExtractCircuitOpenError("circuito abierto"), 503),
+        (PdfExtractOverloadedError("bulkhead lleno"), 503),
         (PdfExtractTimeoutError("tardó demasiado"), 504),
     ],
 )

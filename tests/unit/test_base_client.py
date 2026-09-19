@@ -1,8 +1,11 @@
+import asyncio
+
 import httpx
 import pytest
 import respx
 
 from app.clients.base_client import BaseClient
+from app.clients.bulkhead import Bulkhead, BulkheadFullError
 from app.clients.circuit_breaker import CircuitBreaker, CircuitOpenError, CircuitState
 from app.clients.retry import RetryPolicy
 
@@ -260,3 +263,70 @@ async def test_cada_reintento_pasa_por_el_breaker_y_el_circuito_abierto_corta_el
 
     # Dos intentos reales abren el circuito; el tercer intento se corta sin red.
     assert route.call_count == 2
+
+
+# --- Bulkhead -----------------------------------------------------------------
+
+
+class BlockingTransport(httpx.AsyncBaseTransport):
+    """Transporte que retiene cada request hasta que se dispare `release`."""
+
+    def __init__(self) -> None:
+        self.release = asyncio.Event()
+        self.started = 0
+
+    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        self.started += 1
+        await self.release.wait()
+        return httpx.Response(200)
+
+
+async def test_request_limita_las_llamadas_en_vuelo_y_rechaza_el_exceso() -> None:
+    transport = BlockingTransport()
+    bulkhead = Bulkhead(max_concurrent=1, max_waiting=0, acquire_timeout_seconds=1)
+    client = BaseClient(BASE_URL, timeout_seconds=5, bulkhead=bulkhead)
+    client._client = httpx.AsyncClient(base_url=BASE_URL, transport=transport)
+
+    first = asyncio.create_task(client._request("GET", "/health"))
+    await asyncio.sleep(0)
+    assert transport.started == 1
+
+    with pytest.raises(BulkheadFullError):
+        await client._request("GET", "/health")
+    assert transport.started == 1  # la segunda nunca salió
+
+    transport.release.set()
+    assert (await first).status_code == 200
+    await client.aclose()
+
+
+async def test_request_libera_el_slot_al_terminar() -> None:
+    transport = BlockingTransport()
+    transport.release.set()
+    bulkhead = Bulkhead(max_concurrent=1, max_waiting=0, acquire_timeout_seconds=1)
+    client = BaseClient(BASE_URL, timeout_seconds=5, bulkhead=bulkhead)
+    client._client = httpx.AsyncClient(base_url=BASE_URL, transport=transport)
+
+    await client._request("GET", "/health")
+    await client._request("GET", "/health")
+
+    assert transport.started == 2
+    assert bulkhead.active == 0
+    await client.aclose()
+
+
+@respx.mock
+async def test_el_circuito_abierto_se_evalua_antes_de_ocupar_un_slot() -> None:
+    respx.get(f"{BASE_URL}/health").mock(side_effect=connect_error())
+    breaker = make_breaker(threshold=1)
+    bulkhead = Bulkhead(max_concurrent=1, max_waiting=0, acquire_timeout_seconds=1)
+
+    async with BaseClient(
+        BASE_URL, timeout_seconds=5, circuit_breaker=breaker, bulkhead=bulkhead
+    ) as client:
+        with pytest.raises(httpx.ConnectError):
+            await client._request("GET", "/health")
+        with pytest.raises(CircuitOpenError):
+            await client._request("GET", "/health")
+
+    assert bulkhead.active == 0

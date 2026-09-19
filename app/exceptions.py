@@ -35,3 +35,7 @@ class PdfExtractTimeoutError(PdfExtractError):
 
 class PdfExtractCircuitOpenError(PdfExtractError):
     """pdf-extractext está temporalmente deshabilitado: el circuit breaker está abierto."""
+
+
+class PdfExtractOverloadedError(PdfExtractError):
+    """Demasiadas solicitudes en curso hacia pdf-extractext: el bulkhead está lleno."""

@@ -2,9 +2,11 @@ import httpx
 from pydantic import ValidationError
 
 from app.clients.base_client import BaseClient
+from app.clients.bulkhead import BulkheadFullError
 from app.clients.circuit_breaker import CircuitOpenError
 from app.exceptions import (
     PdfExtractCircuitOpenError,
+    PdfExtractOverloadedError,
     PdfExtractRejectedError,
     PdfExtractTimeoutError,
     PdfExtractUnavailableError,
@@ -32,6 +34,10 @@ class PdfExtractClient(BaseClient):
                 data={"name": name},
                 files={"file": (document.filename, document.content, document.content_type)},
             )
+        except BulkheadFullError as exc:
+            raise PdfExtractOverloadedError(
+                "Demasiadas solicitudes en curso hacia pdf-extractext; reintentar más tarde."
+            ) from exc
         except CircuitOpenError as exc:
             raise PdfExtractCircuitOpenError(
                 "pdf-extractext está temporalmente deshabilitado por fallos repetidos; "

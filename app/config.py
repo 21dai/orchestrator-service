@@ -30,6 +30,12 @@ class Settings(BaseSettings):
     retry_backoff_seconds: float = 0.2
     retry_max_backoff_seconds: float = 2.0
 
+    # Circuit Breaker (ver app/clients/circuit_breaker.py): fallos consecutivos
+    # (errores de transporte, timeouts, 5xx) para abrir el circuito, y segundos
+    # que permanece abierto antes de probar una llamada (half-open).
+    circuit_breaker_failure_threshold: int = 5
+    circuit_breaker_recovery_seconds: float = 30.0
+
 
 @lru_cache
 def get_settings() -> Settings:

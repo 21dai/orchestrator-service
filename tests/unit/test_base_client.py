@@ -3,6 +3,7 @@ import pytest
 import respx
 
 from app.clients.base_client import BaseClient
+from app.clients.circuit_breaker import CircuitBreaker, CircuitOpenError, CircuitState
 from app.clients.retry import RetryPolicy
 
 BASE_URL = "http://pdf-extractext:8000"
@@ -191,3 +192,71 @@ async def test_request_sin_politica_no_reintenta() -> None:
             await client._request("GET", "/health")
 
     assert route.call_count == 1
+
+
+# --- Circuit Breaker ----------------------------------------------------------
+
+
+def make_breaker(threshold: int = 2) -> CircuitBreaker:
+    return CircuitBreaker(failure_threshold=threshold, recovery_timeout_seconds=30)
+
+
+@respx.mock
+async def test_request_abre_el_circuito_tras_fallos_consecutivos_y_deja_de_llamar() -> None:
+    route = respx.get(f"{BASE_URL}/health").mock(side_effect=connect_error())
+    breaker = make_breaker(threshold=2)
+
+    async with BaseClient(BASE_URL, timeout_seconds=5, circuit_breaker=breaker) as client:
+        for _ in range(2):
+            with pytest.raises(httpx.ConnectError):
+                await client._request("GET", "/health")
+
+        assert breaker.state is CircuitState.OPEN
+        with pytest.raises(CircuitOpenError):
+            await client._request("GET", "/health")
+
+    assert route.call_count == 2  # la tercera no tocó la red
+
+
+@respx.mock
+async def test_request_cuenta_los_5xx_como_fallo_y_los_4xx_como_exito() -> None:
+    respx.get(f"{BASE_URL}/a").mock(return_value=httpx.Response(503))
+    respx.get(f"{BASE_URL}/b").mock(return_value=httpx.Response(404))
+    breaker = make_breaker(threshold=2)
+
+    async with BaseClient(BASE_URL, timeout_seconds=5, circuit_breaker=breaker) as client:
+        await client._request("GET", "/a")
+        await client._request("GET", "/b")  # éxito: reinicia la cuenta
+        await client._request("GET", "/a")
+        assert breaker.state is CircuitState.CLOSED
+        await client._request("GET", "/a")
+        assert breaker.state is CircuitState.OPEN
+
+
+@respx.mock
+async def test_request_cuenta_los_timeouts_como_fallo() -> None:
+    respx.post(f"{BASE_URL}/x").mock(side_effect=httpx.ReadTimeout("timeout"))
+    breaker = make_breaker(threshold=2)
+
+    async with BaseClient(BASE_URL, timeout_seconds=5, circuit_breaker=breaker) as client:
+        for _ in range(2):
+            with pytest.raises(httpx.ReadTimeout):
+                await client._request("POST", "/x")
+
+    assert breaker.state is CircuitState.OPEN
+
+
+@respx.mock
+async def test_cada_reintento_pasa_por_el_breaker_y_el_circuito_abierto_corta_el_retry() -> None:
+    route = respx.get(f"{BASE_URL}/health").mock(side_effect=connect_error())
+    breaker = make_breaker(threshold=2)
+    policy = RetryPolicy(max_attempts=5, backoff_seconds=0)
+
+    async with BaseClient(
+        BASE_URL, timeout_seconds=5, retry_policy=policy, circuit_breaker=breaker
+    ) as client:
+        with pytest.raises(CircuitOpenError):
+            await client._request("GET", "/health")
+
+    # Dos intentos reales abren el circuito; el tercer intento se corta sin red.
+    assert route.call_count == 2

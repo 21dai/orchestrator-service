@@ -5,6 +5,7 @@ from typing import Annotated
 
 from fastapi import Depends
 
+from app.clients.circuit_breaker import CircuitBreaker
 from app.clients.pdf_extract_client import PdfExtractClient
 from app.clients.retry import RetryPolicy
 from app.config import Settings, get_settings
@@ -21,6 +22,14 @@ def build_retry_policy(settings: Settings) -> RetryPolicy:
     )
 
 
+def build_circuit_breaker(settings: Settings, name: str) -> CircuitBreaker:
+    return CircuitBreaker(
+        failure_threshold=settings.circuit_breaker_failure_threshold,
+        recovery_timeout_seconds=settings.circuit_breaker_recovery_seconds,
+        name=name,
+    )
+
+
 @lru_cache
 def get_pdf_extract_client() -> PdfExtractClient:
     """Un único client (y pool de conexiones) por proceso, no por request.
@@ -33,6 +42,7 @@ def get_pdf_extract_client() -> PdfExtractClient:
         base_url=settings.pdf_extract_base_url,
         timeout_seconds=settings.http_timeout_seconds,
         retry_policy=build_retry_policy(settings),
+        circuit_breaker=build_circuit_breaker(settings, name="pdf-extractext"),
     )
 
 

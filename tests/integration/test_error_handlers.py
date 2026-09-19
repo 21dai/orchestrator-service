@@ -12,6 +12,7 @@ from app.errors import register_error_handlers
 from app.exceptions import (
     InvalidPdfError,
     OrchestratorError,
+    PdfExtractCircuitOpenError,
     PdfExtractRejectedError,
     PdfExtractTimeoutError,
     PdfExtractUnavailableError,
@@ -37,6 +38,7 @@ def make_client(exc: OrchestratorError) -> TestClient:
         (PdfExtractRejectedError("checksum duplicado"), 400),
         (PdfExtractUnexpectedResponseError("respuesta rara"), 502),
         (PdfExtractUnavailableError("no conecta"), 503),
+        (PdfExtractCircuitOpenError("circuito abierto"), 503),
         (PdfExtractTimeoutError("tardó demasiado"), 504),
     ],
 )

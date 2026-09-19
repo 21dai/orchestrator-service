@@ -31,3 +31,7 @@ class PdfExtractUnavailableError(PdfExtractError):
 
 class PdfExtractTimeoutError(PdfExtractError):
     """pdf-extractext no respondió dentro del timeout configurado."""
+
+
+class PdfExtractCircuitOpenError(PdfExtractError):
+    """pdf-extractext está temporalmente deshabilitado: el circuit breaker está abierto."""

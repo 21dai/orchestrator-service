@@ -32,3 +32,16 @@ async def test_get_pdf_extract_client_aplica_la_politica_de_retry_configurada() 
 
     await client.aclose()
     get_pdf_extract_client.cache_clear()
+
+
+async def test_get_pdf_extract_client_tiene_su_propio_circuit_breaker() -> None:
+    client = get_pdf_extract_client()
+
+    assert client._circuit_breaker is not None
+    assert (
+        client._circuit_breaker.failure_threshold
+        == get_settings().circuit_breaker_failure_threshold
+    )
+
+    await client.aclose()
+    get_pdf_extract_client.cache_clear()

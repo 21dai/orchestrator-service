@@ -38,3 +38,10 @@ def test_settings_tiene_defaults_de_retry() -> None:
     assert settings.retry_max_attempts == 3
     assert settings.retry_backoff_seconds == 0.2
     assert settings.retry_max_backoff_seconds == 2.0
+
+
+def test_settings_tiene_defaults_de_circuit_breaker() -> None:
+    settings = Settings(_env_file=None)
+
+    assert settings.circuit_breaker_failure_threshold == 5
+    assert settings.circuit_breaker_recovery_seconds == 30.0

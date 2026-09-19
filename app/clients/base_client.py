@@ -3,6 +3,7 @@ from typing import Any, Self
 
 import httpx
 
+from app.clients.circuit_breaker import CircuitBreaker
 from app.clients.retry import RetryPolicy
 
 logger = logging.getLogger(__name__)
@@ -26,12 +27,14 @@ class BaseClient:
         base_url: str,
         timeout_seconds: float,
         retry_policy: RetryPolicy | None = None,
+        circuit_breaker: CircuitBreaker | None = None,
     ) -> None:
         self._client = httpx.AsyncClient(
             base_url=base_url,
             timeout=httpx.Timeout(timeout_seconds),
         )
         self._retry_policy = retry_policy
+        self._circuit_breaker = circuit_breaker
 
     @property
     def base_url(self) -> httpx.URL:
@@ -41,9 +44,11 @@ class BaseClient:
         """Envía una request al microservicio y devuelve la respuesta cruda.
 
         `path` se resuelve contra `base_url`. Aplica la política de Retry si
-        hay una configurada. Los errores de transporte y los timeouts de
-        httpx se propagan tal cual (después de agotar los reintentos): cada
-        cliente concreto decide cómo traducirlos a excepciones de dominio.
+        hay una configurada; cada intento pasa por el Circuit Breaker (si
+        está abierto se corta con `CircuitOpenError`, que no se reintenta).
+        Los errores de transporte y los timeouts de httpx se propagan tal
+        cual (después de agotar los reintentos): cada cliente concreto decide
+        cómo traducirlos a excepciones de dominio.
         """
         if self._retry_policy is None:
             return await self._send(method, path, **kwargs)
@@ -81,9 +86,27 @@ class BaseClient:
             attempt += 1
 
     async def _send(self, method: str, path: str, **kwargs: Any) -> httpx.Response:
-        """Un intento real de request, sin resiliencia. Punto de extensión
-        para el Circuit Breaker y el Bulkhead."""
-        return await self._client.request(method, path, **kwargs)
+        """Un intento real de request, protegido por el Circuit Breaker.
+
+        Para el breaker cuentan como fallo las excepciones de httpx (transporte
+        y timeouts) y las respuestas 5xx; un 4xx es una respuesta válida del
+        servicio, así que cuenta como éxito. Punto de extensión para el Bulkhead.
+        """
+        breaker = self._circuit_breaker
+        if breaker is None:
+            return await self._client.request(method, path, **kwargs)
+
+        breaker.before_request()
+        try:
+            response = await self._client.request(method, path, **kwargs)
+        except Exception:
+            breaker.record_failure()
+            raise
+        if response.is_server_error:
+            breaker.record_failure()
+        else:
+            breaker.record_success()
+        return response
 
     async def aclose(self) -> None:
         await self._client.aclose()

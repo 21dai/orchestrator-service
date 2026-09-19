@@ -2,7 +2,9 @@ import httpx
 from pydantic import ValidationError
 
 from app.clients.base_client import BaseClient
+from app.clients.circuit_breaker import CircuitOpenError
 from app.exceptions import (
+    PdfExtractCircuitOpenError,
     PdfExtractRejectedError,
     PdfExtractTimeoutError,
     PdfExtractUnavailableError,
@@ -30,6 +32,11 @@ class PdfExtractClient(BaseClient):
                 data={"name": name},
                 files={"file": (document.filename, document.content, document.content_type)},
             )
+        except CircuitOpenError as exc:
+            raise PdfExtractCircuitOpenError(
+                "pdf-extractext está temporalmente deshabilitado por fallos repetidos; "
+                f"reintentar en {exc.retry_after_seconds:.0f} s."
+            ) from exc
         except httpx.TimeoutException as exc:
             raise PdfExtractTimeoutError(
                 "pdf-extractext no respondió dentro del timeout configurado."

@@ -4,8 +4,10 @@ import httpx
 import pytest
 import respx
 
+from app.clients.circuit_breaker import CircuitBreaker
 from app.clients.pdf_extract_client import PdfExtractClient
 from app.exceptions import (
+    PdfExtractCircuitOpenError,
     PdfExtractRejectedError,
     PdfExtractTimeoutError,
     PdfExtractUnavailableError,
@@ -146,4 +148,19 @@ async def test_create_document_traduce_servicio_no_disponible() -> None:
 
     async with PdfExtractClient(base_url=BASE_URL, timeout_seconds=5) as client:
         with pytest.raises(PdfExtractUnavailableError):
+            await client.create_document(make_document(), name="informe")
+
+
+@respx.mock
+async def test_create_document_traduce_el_circuito_abierto() -> None:
+    respx.post(DOCUMENTS_URL).mock(side_effect=httpx.ConnectError("refused"))
+    breaker = CircuitBreaker(failure_threshold=1, recovery_timeout_seconds=30)
+
+    async with PdfExtractClient(
+        base_url=BASE_URL, timeout_seconds=5, circuit_breaker=breaker
+    ) as client:
+        with pytest.raises(PdfExtractUnavailableError):
+            await client.create_document(make_document(), name="informe")
+
+        with pytest.raises(PdfExtractCircuitOpenError, match="temporalmente"):
             await client.create_document(make_document(), name="informe")

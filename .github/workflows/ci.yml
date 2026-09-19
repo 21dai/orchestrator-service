@@ -1,0 +1,76 @@
+# Pipeline de calidad (issue #20). Corre en cada push a main y en cada PR:
+#   1. lint + formato (ruff)
+#   2. tests unitarios e integración con cobertura mínima (pytest-cov, umbral en pyproject)
+#   3. build de la imagen Docker y smoke test de /health
+#   4. escaneo de secretos en el historial (trufflehog)
+#   5. convención de commits en PRs: tipo(#N): descripcion
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  lint-y-tests:
+    name: Lint y tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - run: uv python install
+      - run: uv sync --locked
+      - name: Ruff (lint)
+        run: uv run ruff check .
+      - name: Ruff (formato)
+        run: uv run ruff format --check .
+      - name: Pytest con cobertura
+        run: uv run pytest
+
+  docker:
+    name: Build Docker y smoke test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build
+        run: docker build -t orchestrator-service:ci .
+      - name: Smoke test /health
+        run: |
+          docker run -d --rm --name orch -p 8000:8000 orchestrator-service:ci
+          for i in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:8000/health; then echo; exit 0; fi
+            sleep 1
+          done
+          echo "/health no respondió a tiempo"; docker logs orch; exit 1
+      - if: always()
+        run: docker stop orch || true
+
+  secretos:
+    name: Escaneo de secretos
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: trufflesecurity/trufflehog@main
+        with:
+          extra_args: --only-verified
+
+  commits:
+    name: Convención de commits
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: "Verificar formato tipo(#N): descripcion"
+        run: |
+          pattern='^(feat|fix|docs|test|chore|refactor|ci|build|perf|style)(\(#[0-9]+\))?: .+'
+          fallos=0
+          while IFS= read -r msg; do
+            if [[ "$msg" =~ $pattern ]]; then echo "OK   $msg"; else echo "MAL  $msg"; fallos=1; fi
+          done < <(git log --format=%s "origin/${{ github.base_ref }}..HEAD")
+          exit $fallos

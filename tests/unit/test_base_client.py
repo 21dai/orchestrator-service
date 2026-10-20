@@ -4,7 +4,7 @@ import httpx
 import pytest
 import respx
 
-from app.clients.base_client import BaseClient
+from app.clients.base_client import BaseClient, retry_after_seconds
 from app.clients.bulkhead import Bulkhead, BulkheadFullError
 from app.clients.circuit_breaker import CircuitBreaker, CircuitOpenError, CircuitState
 from app.clients.retry import RetryPolicy
@@ -436,3 +436,16 @@ async def test_un_503_con_retry_after_en_half_open_deja_la_prueba_para_la_siguie
         await client._request("POST", "/x")
 
     assert breaker.state is CircuitState.CLOSED
+
+
+@pytest.mark.parametrize(
+    ("headers", "expected"),
+    [
+        ({"Retry-After": "2"}, 2.0),
+        ({"Retry-After": "abc"}, None),
+        ({"Retry-After": "-1"}, None),
+        ({}, None),
+    ],
+)
+def test_retry_after_seconds_lee_el_header(headers: dict[str, str], expected: float | None) -> None:
+    assert retry_after_seconds(httpx.Response(503, headers=headers)) == expected

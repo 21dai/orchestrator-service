@@ -1,7 +1,7 @@
 import httpx
 from pydantic import ValidationError
 
-from app.clients.base_client import BaseClient
+from app.clients.base_client import BaseClient, retry_after_seconds
 from app.clients.bulkhead import BulkheadFullError
 from app.clients.circuit_breaker import CircuitOpenError
 from app.exceptions import (
@@ -41,7 +41,8 @@ class PdfExtractClient(BaseClient):
         except CircuitOpenError as exc:
             raise PdfExtractCircuitOpenError(
                 "pdf-extractext está temporalmente deshabilitado por fallos repetidos; "
-                f"reintentar en {exc.retry_after_seconds:.0f} s."
+                f"reintentar en {exc.retry_after_seconds:.0f} s.",
+                retry_after_seconds=exc.retry_after_seconds,
             ) from exc
         except httpx.ConnectTimeout as exc:
             # Es un timeout, pero de conexión: el hoja no está escuchando.
@@ -59,6 +60,16 @@ class PdfExtractClient(BaseClient):
         detail = self._error_detail(response)
         if response.is_client_error:
             raise PdfExtractRejectedError(detail)
+        if response.status_code == httpx.codes.SERVICE_UNAVAILABLE:
+            retry_after = retry_after_seconds(response)
+            if retry_after is None:
+                # Sin Retry-After lo responde Traefik: no queda ninguna réplica sana.
+                raise PdfExtractUnavailableError(f"pdf-extractext no está disponible: {detail}")
+            # Con Retry-After es la cola de pdf-extractext llena: el cliente
+            # puede volver a intentar en ese tiempo.
+            raise PdfExtractOverloadedError(
+                f"pdf-extractext está saturado: {detail}", retry_after_seconds=retry_after
+            )
         raise PdfExtractUnexpectedResponseError(
             f"pdf-extractext respondió {response.status_code}: {detail}"
         )

@@ -10,6 +10,29 @@ from app.clients.retry import RetryPolicy
 logger = logging.getLogger(__name__)
 
 
+def retry_after_seconds(response: httpx.Response) -> float | None:
+    """Segundos del header `Retry-After`, o None si no viene o no es un número."""
+    value = response.headers.get("retry-after", "").strip()
+    try:
+        seconds = float(value)
+    except ValueError:
+        return None
+    return seconds if seconds >= 0 else None
+
+
+def is_load_shedding(response: httpx.Response) -> bool:
+    """503 con `Retry-After`: el servicio está sano pero con la cola llena.
+
+    Es como responde pdf-extractext cuando no da abasto (backpressure). No es
+    una falla: abrir el circuito por esto cortaría un servicio sano justo
+    cuando hay más demanda.
+    """
+    return (
+        response.status_code == httpx.codes.SERVICE_UNAVAILABLE
+        and retry_after_seconds(response) is not None
+    )
+
+
 class BaseClient:
     """Cliente HTTP base para comunicarse con otro microservicio.
 
@@ -101,7 +124,8 @@ class BaseClient:
         vuelo y en espera) y recién entonces la red. Para el breaker cuentan
         como fallo las excepciones de httpx (transporte y timeouts) y las
         respuestas 5xx; un 4xx es una respuesta válida del servicio, así que
-        cuenta como éxito. El rechazo del Bulkhead no cuenta: el hoja no falló.
+        cuenta como éxito. No cuentan ni el rechazo del Bulkhead ni un 503 con
+        `Retry-After` (cola llena, ver `is_load_shedding`): el hoja no falló.
 
         Si esta request es la llamada de prueba del half-open y termina sin
         resultado (la rechaza el Bulkhead o se cancela), se libera en el
@@ -129,7 +153,9 @@ class BaseClient:
                 breaker.record_failure()
             raise
         if breaker is not None:
-            if response.is_server_error:
+            if is_load_shedding(response):
+                pass  # ni éxito ni fallo; si era la prueba, la libera `_send`
+            elif response.is_server_error:
                 breaker.record_failure()
             else:
                 breaker.record_success()

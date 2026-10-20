@@ -9,6 +9,7 @@ Cubre excepciones de dominio, errores de validación de FastAPI,
 errores HTTP de Starlette (404/405) y un fallback para fallos inesperados.
 """
 
+import math
 from collections.abc import Awaitable, Callable
 from http import HTTPStatus
 
@@ -96,6 +97,12 @@ ExceptionHandler = Callable[[Request, Exception], Awaitable[JSONResponse]]
 
 def _make_handler(status_code: int) -> ExceptionHandler:
     async def handler(request: Request, exc: Exception) -> JSONResponse:
-        return problem_response(request, status_code, str(exc))
+        response = problem_response(request, status_code, str(exc))
+        retry_after = getattr(exc, "retry_after_seconds", None)
+        if retry_after is not None:
+            # Retry-After va en segundos enteros; nunca 0, que invitaría a
+            # reintentar en el acto.
+            response.headers["Retry-After"] = str(max(1, math.ceil(retry_after)))
+        return response
 
     return handler

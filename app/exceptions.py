@@ -6,7 +6,16 @@ traducen a respuestas HTTP en un solo lugar (`app/errors.py`).
 
 
 class OrchestratorError(Exception):
-    """Base de todas las excepciones de dominio."""
+    """Base de todas las excepciones de dominio.
+
+    `retry_after_seconds`, si se indica, le dice al cliente cuándo tiene
+    sentido volver a intentar: `app/errors.py` lo manda en el header
+    `Retry-After`.
+    """
+
+    def __init__(self, detail: str, retry_after_seconds: float | None = None) -> None:
+        super().__init__(detail)
+        self.retry_after_seconds = retry_after_seconds
 
 
 class InvalidPdfError(OrchestratorError):
@@ -26,7 +35,7 @@ class PdfExtractUnexpectedResponseError(PdfExtractError):
 
 
 class PdfExtractUnavailableError(PdfExtractError):
-    """No se pudo conectar con pdf-extractext."""
+    """No se pudo conectar con pdf-extractext, o no quedan réplicas sanas (503 sin Retry-After)."""
 
 
 class PdfExtractTimeoutError(PdfExtractError):
@@ -38,4 +47,4 @@ class PdfExtractCircuitOpenError(PdfExtractError):
 
 
 class PdfExtractOverloadedError(PdfExtractError):
-    """Demasiadas solicitudes en curso hacia pdf-extractext: el bulkhead está lleno."""
+    """pdf-extractext no da abasto: el bulkhead está lleno o su cola respondió 503."""

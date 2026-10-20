@@ -85,6 +85,30 @@ def test_en_half_open_solo_deja_pasar_una_llamada_de_prueba(
         breaker.before_request()
 
 
+def test_before_request_indica_si_es_la_llamada_de_prueba(
+    breaker: CircuitBreaker, clock: FakeClock
+) -> None:
+    assert breaker.before_request() is False
+    fail_n_times(breaker, 3)
+    clock.advance(30)
+
+    assert breaker.before_request() is True
+
+
+def test_liberar_la_llamada_de_prueba_deja_probar_a_la_siguiente(
+    breaker: CircuitBreaker, clock: FakeClock
+) -> None:
+    fail_n_times(breaker, 3)
+    clock.advance(30)
+    breaker.before_request()
+
+    # La prueba terminó sin resultado (p. ej. la rechazó el Bulkhead o se canceló).
+    breaker.release_trial()
+
+    assert breaker.state is CircuitState.HALF_OPEN
+    assert breaker.before_request() is True  # la siguiente request es la nueva prueba
+
+
 def test_exito_en_half_open_cierra_el_circuito(breaker: CircuitBreaker, clock: FakeClock) -> None:
     fail_n_times(breaker, 3)
     clock.advance(30)

@@ -340,3 +340,65 @@ async def test_el_circuito_abierto_se_evalua_antes_de_ocupar_un_slot() -> None:
             await client._request("GET", "/health")
 
     assert bulkhead.active == 0
+
+
+# --- Circuit Breaker y Bulkhead juntos ------------------------------------------
+
+
+class FakeClock:
+    def __init__(self) -> None:
+        self.now = 1000.0
+
+    def __call__(self) -> float:
+        return self.now
+
+
+def half_open_breaker() -> CircuitBreaker:
+    """Breaker que ya se abrió y cuyo tiempo de recuperación venció."""
+    clock = FakeClock()
+    breaker = CircuitBreaker(failure_threshold=1, recovery_timeout_seconds=30, clock=clock)
+    breaker.record_failure()
+    clock.now += 30
+    assert breaker.state is CircuitState.HALF_OPEN
+    return breaker
+
+
+async def test_si_el_bulkhead_rechaza_la_llamada_de_prueba_el_circuito_no_queda_trabado() -> None:
+    transport = BlockingTransport()
+    transport.release.set()
+    breaker = half_open_breaker()
+    bulkhead = Bulkhead(max_concurrent=1, max_waiting=0, acquire_timeout_seconds=1)
+    client = BaseClient(BASE_URL, timeout_seconds=5, circuit_breaker=breaker, bulkhead=bulkhead)
+    client._client = httpx.AsyncClient(base_url=BASE_URL, transport=transport)
+
+    # Una request de antes de que se abriera el circuito sigue ocupando el único slot.
+    async with bulkhead.slot():
+        with pytest.raises(BulkheadFullError):
+            await client._request("GET", "/health")
+
+    response = await client._request("GET", "/health")
+
+    assert response.status_code == 200
+    assert breaker.state is CircuitState.CLOSED
+    await client.aclose()
+
+
+async def test_si_se_cancela_la_llamada_de_prueba_el_circuito_no_queda_trabado() -> None:
+    transport = BlockingTransport()
+    breaker = half_open_breaker()
+    client = BaseClient(BASE_URL, timeout_seconds=5, circuit_breaker=breaker)
+    client._client = httpx.AsyncClient(base_url=BASE_URL, transport=transport)
+
+    trial = asyncio.create_task(client._request("GET", "/health"))
+    await asyncio.sleep(0)
+    assert transport.started == 1
+    trial.cancel()  # p. ej. el usuario cortó la conexión con el orquestador
+    with pytest.raises(asyncio.CancelledError):
+        await trial
+
+    transport.release.set()
+    response = await client._request("GET", "/health")
+
+    assert response.status_code == 200
+    assert breaker.state is CircuitState.CLOSED
+    await client.aclose()

@@ -1,17 +1,20 @@
-from fastapi import UploadFile
+from starlette.datastructures import UploadFile
 
+from app.exceptions import PdfTooLargeError
 from app.schemas.documents import PdfDocument
 from app.services.pdf_validator import PDF_CONTENT_TYPE, validate_pdf
 
 
-async def load_pdf(upload: UploadFile) -> PdfDocument:
+async def load_pdf(upload: UploadFile, max_size_bytes: int) -> PdfDocument:
     """Lee el archivo subido, lo valida y lo convierte a `PdfDocument`.
 
-    Es el único punto donde el `UploadFile` de FastAPI se traduce a la
-    representación interna (`bytes` en memoria, ADR-0001). Lanza
-    `InvalidPdfError` si el archivo no es un PDF.
+    Es el único punto donde el `UploadFile` se traduce a la representación
+    interna (`bytes` en memoria, ADR-0001). Lanza `PdfTooLargeError` si supera
+    `max_size_bytes` e `InvalidPdfError` si el archivo no es un PDF.
     """
     content = await upload.read()
+    if len(content) > max_size_bytes:
+        raise PdfTooLargeError(max_size_bytes)
     filename = upload.filename or ""
 
     validate_pdf(filename=filename, content_type=upload.content_type, content=content)

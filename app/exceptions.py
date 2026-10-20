@@ -22,6 +22,17 @@ class InvalidPdfError(OrchestratorError):
     """El archivo recibido no es un PDF válido."""
 
 
+class PdfTooLargeError(OrchestratorError):
+    """El archivo recibido supera el tamaño máximo permitido (HTTP 413)."""
+
+    def __init__(self, max_size_bytes: int) -> None:
+        super().__init__(
+            f"El archivo supera el tamaño máximo permitido de {max_size_bytes} bytes "
+            f"({max_size_bytes / (1024 * 1024):g} MB)."
+        )
+        self.max_size_bytes = max_size_bytes
+
+
 class PdfExtractError(OrchestratorError):
     """Base de los fallos al llamar al microservicio pdf-extractext."""
 

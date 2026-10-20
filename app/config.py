@@ -47,6 +47,11 @@ class Settings(BaseSettings):
     bulkhead_max_waiting: int = 10
     bulkhead_acquire_timeout_seconds: float = 5.0
 
+    # Tamaño máximo del PDF, el mismo que acepta pdf-extractext. Más grande se
+    # rechaza con 413 sin terminar de leerlo; lo aceptado queda en memoria y
+    # nunca se escribe a disco (ADR-0001). Acota la memoria del Bulkhead.
+    max_pdf_size_bytes: int = 10 * 1024 * 1024
+
 
 @lru_cache
 def get_settings() -> Settings:

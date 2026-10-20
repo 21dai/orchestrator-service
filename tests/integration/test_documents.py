@@ -1,11 +1,14 @@
 """Flujo completo del endpoint con pdf-extractext simulado por respx."""
 
+from collections.abc import Iterator
+
 import httpx
 import pytest
 import respx
 from fastapi.testclient import TestClient
 
-from app.config import get_settings
+from app.config import Settings, get_settings
+from app.main import app
 
 PDF_CONTENT = b"%PDF-1.4\n%contenido de prueba"
 DOCUMENTS_URL = f"{get_settings().pdf_extract_base_url}/api/v1/documents"
@@ -180,3 +183,60 @@ def test_post_documents_reenvia_la_sobrecarga_de_pdf_extractext_con_retry_after(
     assert response.status_code == 503
     assert response.headers["retry-after"] == "3"
     assert response.headers["content-type"] == "application/problem+json"
+
+
+@pytest.fixture
+def small_limit() -> Iterator[None]:
+    """Baja el límite del PDF a 1 KB para probar el 413 sin mandar 10 MB."""
+    app.dependency_overrides[get_settings] = lambda: Settings(
+        _env_file=None, max_pdf_size_bytes=1024
+    )
+    yield
+    app.dependency_overrides.clear()
+
+
+def test_post_documents_rechaza_un_pdf_mas_grande_que_el_limite_con_413(
+    client: TestClient, small_limit: None
+) -> None:
+    response = client.post(
+        "/api/v1/documents",
+        files={"file": ("grande.pdf", PDF_CONTENT + b"x" * 2048, "application/pdf")},
+    )
+
+    assert response.status_code == 413
+    assert response.headers["content-type"] == "application/problem+json"
+    body = response.json()
+    assert body["title"] == "Content Too Large"
+    assert "tamaño máximo" in body["detail"]
+
+
+@respx.mock
+def test_post_documents_reenvia_completo_un_pdf_de_mas_de_1_mb(client: TestClient) -> None:
+    content = b"%PDF-1.4\n" + b"x" * (2 * 1024 * 1024)
+    route = respx.post(DOCUMENTS_URL).mock(return_value=httpx.Response(201, json=EXTRACT_RESPONSE))
+
+    response = client.post(
+        "/api/v1/documents",
+        data={"name": "grande"},
+        files={"file": ("grande.pdf", content, "application/pdf")},
+    )
+
+    assert response.status_code == 201
+    assert content in route.calls.last.request.content
+
+
+def test_post_documents_solo_con_nombre_devuelve_422(client: TestClient) -> None:
+    response = client.post("/api/v1/documents", files={"name": (None, "informe")})
+
+    assert response.status_code == 422
+    assert "file" in response.json()["detail"]
+
+
+def test_post_documents_documenta_el_multipart_en_openapi(client: TestClient) -> None:
+    schema = client.get("/openapi.json").json()
+    body = schema["paths"]["/api/v1/documents"]["post"]["requestBody"]
+
+    form = body["content"]["multipart/form-data"]["schema"]
+    assert form["required"] == ["file"]
+    assert form["properties"]["file"]["format"] == "binary"
+    assert "name" in form["properties"]

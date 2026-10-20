@@ -4,11 +4,12 @@ import pytest
 from fastapi import UploadFile
 from starlette.datastructures import Headers
 
-from app.exceptions import InvalidPdfError
+from app.exceptions import InvalidPdfError, PdfTooLargeError
 from app.schemas.documents import PdfDocument
 from app.services.pdf_loader import load_pdf
 
 PDF_CONTENT = b"%PDF-1.4\n%contenido de prueba"
+MAX_SIZE = 10 * 1024 * 1024
 
 
 def make_upload(filename: str, content_type: str, content: bytes) -> UploadFile:
@@ -22,7 +23,7 @@ def make_upload(filename: str, content_type: str, content: bytes) -> UploadFile:
 async def test_load_pdf_convierte_el_upload_en_pdf_document() -> None:
     upload = make_upload("informe.pdf", "application/pdf", PDF_CONTENT)
 
-    document = await load_pdf(upload)
+    document = await load_pdf(upload, max_size_bytes=MAX_SIZE)
 
     assert document == PdfDocument(
         filename="informe.pdf",
@@ -35,7 +36,7 @@ async def test_load_pdf_lee_el_contenido_completo() -> None:
     content = b"%PDF-1.4\n" + b"x" * 100_000
     upload = make_upload("grande.pdf", "application/pdf", content)
 
-    document = await load_pdf(upload)
+    document = await load_pdf(upload, max_size_bytes=MAX_SIZE)
 
     assert document.size_bytes == len(content)
     assert document.content == content
@@ -45,11 +46,26 @@ async def test_load_pdf_rechaza_un_archivo_invalido() -> None:
     upload = make_upload("notas.txt", "text/plain", b"texto plano")
 
     with pytest.raises(InvalidPdfError):
-        await load_pdf(upload)
+        await load_pdf(upload, max_size_bytes=MAX_SIZE)
 
 
 async def test_load_pdf_rechaza_un_upload_sin_nombre() -> None:
     upload = UploadFile(file=BytesIO(PDF_CONTENT))
 
     with pytest.raises(InvalidPdfError):
-        await load_pdf(upload)
+        await load_pdf(upload, max_size_bytes=MAX_SIZE)
+
+
+async def test_load_pdf_rechaza_un_archivo_mas_grande_que_el_limite() -> None:
+    upload = make_upload("grande.pdf", "application/pdf", PDF_CONTENT + b"x" * 100)
+
+    with pytest.raises(PdfTooLargeError, match="tamaño máximo"):
+        await load_pdf(upload, max_size_bytes=len(PDF_CONTENT))
+
+
+async def test_load_pdf_acepta_un_archivo_justo_en_el_limite() -> None:
+    upload = make_upload("justo.pdf", "application/pdf", PDF_CONTENT)
+
+    document = await load_pdf(upload, max_size_bytes=len(PDF_CONTENT))
+
+    assert document.size_bytes == len(PDF_CONTENT)

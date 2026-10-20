@@ -59,3 +59,9 @@ def test_settings_tiene_timeout_de_conexion_separado() -> None:
     settings = Settings(_env_file=None)
 
     assert settings.http_connect_timeout_seconds == 2.0
+
+
+def test_settings_limita_el_pdf_a_10_mb_como_pdf_extractext() -> None:
+    settings = Settings(_env_file=None)
+
+    assert settings.max_pdf_size_bytes == 10 * 1024 * 1024

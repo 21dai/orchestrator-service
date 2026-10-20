@@ -74,8 +74,13 @@ class CircuitBreaker:
             self._transition(CircuitState.HALF_OPEN)
         return self._state
 
-    def before_request(self) -> None:
-        """Llamar antes de cada request. Lanza `CircuitOpenError` si no debe salir."""
+    def before_request(self) -> bool:
+        """Llamar antes de cada request. Lanza `CircuitOpenError` si no debe salir.
+
+        Devuelve True si esta request es la llamada de prueba del half-open:
+        quien la hace tiene que terminarla con `record_success`,
+        `record_failure` o, si no llegó a tener resultado, `release_trial`.
+        """
         state = self.state
         if state is CircuitState.OPEN:
             raise CircuitOpenError(self.name, self._remaining())
@@ -83,6 +88,18 @@ class CircuitBreaker:
             if self._trial_in_flight:
                 raise CircuitOpenError(self.name, 0.0)
             self._trial_in_flight = True
+            return True
+        return False
+
+    def release_trial(self) -> None:
+        """La llamada de prueba terminó sin resultado: libera el lugar.
+
+        Pasa si el Bulkhead la rechaza o si se cancela (el usuario cortó la
+        conexión). No dice nada del servicio, así que el circuito sigue en
+        half-open y la próxima request hace la prueba. Sin esto, el lugar
+        quedaba ocupado para siempre y el breaker rechazaba todo.
+        """
+        self._trial_in_flight = False
 
     def record_success(self) -> None:
         self._consecutive_failures = 0

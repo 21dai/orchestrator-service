@@ -102,15 +102,22 @@ class BaseClient:
         como fallo las excepciones de httpx (transporte y timeouts) y las
         respuestas 5xx; un 4xx es una respuesta válida del servicio, así que
         cuenta como éxito. El rechazo del Bulkhead no cuenta: el hoja no falló.
+
+        Si esta request es la llamada de prueba del half-open y termina sin
+        resultado (la rechaza el Bulkhead o se cancela), se libera en el
+        `finally` para que el circuito no quede trabado.
         """
         breaker = self._circuit_breaker
-        if breaker is not None:
-            breaker.before_request()
+        is_trial = breaker.before_request() if breaker is not None else False
 
-        if self._bulkhead is None:
-            return await self._send_tracked(breaker, method, path, **kwargs)
-        async with self._bulkhead.slot():
-            return await self._send_tracked(breaker, method, path, **kwargs)
+        try:
+            if self._bulkhead is None:
+                return await self._send_tracked(breaker, method, path, **kwargs)
+            async with self._bulkhead.slot():
+                return await self._send_tracked(breaker, method, path, **kwargs)
+        finally:
+            if is_trial and breaker is not None:
+                breaker.release_trial()
 
     async def _send_tracked(
         self, breaker: CircuitBreaker | None, method: str, path: str, **kwargs: Any

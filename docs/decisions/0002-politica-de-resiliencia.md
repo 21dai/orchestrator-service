@@ -112,3 +112,27 @@ del Bulkhead).
 - Un cliente del orquestador puede recibir 503 aun con pdf-extractext sano
   (Bulkhead lleno): es la señal de que hay que reintentar más tarde o escalar
   réplicas, no un error.
+
+## Actualización (2026-10-20): dos fallas del Circuit Breaker
+
+La devolución del profesor marcó que el Circuit Breaker y el Bulkhead estaban
+mal. Se reprodujeron dos fallas y se corrigieron con TDD:
+
+1. **El circuito quedaba trabado en half-open para siempre.** La llamada de
+   prueba se marcaba en curso antes de pedir lugar en el Bulkhead; si el
+   Bulkhead la rechazaba, o si la request se cancelaba (el usuario cortó la
+   conexión: `CancelledError` no es `Exception`), nunca se registraba éxito ni
+   fallo y el breaker rechazaba todo hasta reiniciar el proceso. Ahora
+   `before_request()` avisa si la request es la prueba y `BaseClient` la libera
+   en un `finally` (`release_trial()`) cuando termina sin resultado.
+2. **La cola llena de pdf-extractext abría el circuito.** Desde su versión
+   1.3.0, pdf-extractext responde `503` con `Retry-After` cuando no da abasto
+   (backpressure): está sano, solo ocupado. El breaker lo contaba como fallo,
+   así que en un pico cinco rechazos cortaban 30 s un servicio sano, y el
+   cliente recibía `502`. Ahora un `503` con `Retry-After` no cuenta ni como
+   éxito ni como fallo, y el orquestador responde `503` con el mismo
+   `Retry-After`. Un `503` sin ese header (el de Traefik cuando no queda
+   ninguna réplica sana) sigue contando como fallo.
+
+El circuito abierto también devuelve `Retry-After` con lo que falta para la
+llamada de prueba.

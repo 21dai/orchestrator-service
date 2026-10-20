@@ -84,3 +84,20 @@ Restricciones que pesan en la decisión:
   reintentarse).
 - El orquestador no interpreta el contenido del PDF (no usa `pypdf`): eso es
   responsabilidad del microservicio hoja.
+
+## Actualización (2026-10-20): el PDF no pasaba por memoria
+
+La devolución del profesor pidió revisar la validación del orquestador, y la
+revisión encontró que esta decisión no se cumplía del todo:
+
+- Con `UploadFile` de FastAPI, Starlette guarda en un **archivo temporal en
+  disco** toda parte del multipart de más de 1 MB: justo la alternativa que
+  este ADR rechaza.
+- No había límite de tamaño: un archivo enorme se leía entero antes de
+  validarlo, y el peor caso de memoria del Bulkhead (PDFs de hasta 10 MB) no
+  estaba garantizado.
+
+Ahora el router lee el multipart con `app/uploads.py` (la misma técnica que
+pdf-extractext): el umbral para pasar a disco es el tamaño máximo aceptado, y
+el body se corta con `413` por `Content-Length` o apenas supera
+`MAX_PDF_SIZE_BYTES` (10 MB). Todo lo aceptado queda en memoria.

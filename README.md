@@ -62,7 +62,7 @@ Documentación interactiva (Swagger): `/docs` · OpenAPI: `/openapi.json`.
 | Método | Ruta | Descripción | Respuestas |
 |---|---|---|---|
 | `GET` | `/health` | Salud del servicio (la usan Docker y Traefik) | `200 {"status":"ok"}` |
-| `POST` | `/api/v1/documents` | Recibe un PDF, lo procesa vía pdf-extractext y devuelve el texto extraído | `201`, `400`, `422`, `502`, `503`, `504` |
+| `POST` | `/api/v1/documents` | Recibe un PDF, lo procesa vía pdf-extractext y devuelve el texto extraído | `201`, `400`, `413`, `422`, `502`, `503`, `504` |
 
 ### `POST /api/v1/documents`
 
@@ -70,7 +70,7 @@ Body `multipart/form-data`:
 
 | Campo | Tipo | Requerido | Descripción |
 |---|---|---|---|
-| `file` | archivo | sí | PDF a procesar (`Content-Type: application/pdf`, máximo 10 MB en pdf-extractext) |
+| `file` | archivo | sí | PDF a procesar (`Content-Type: application/pdf`, máximo 10 MB: `MAX_PDF_SIZE_BYTES`). Se lee en memoria y nunca se escribe a disco |
 | `name` | texto | no | Nombre del documento. Si se omite, se usa el nombre del archivo sin extensión |
 
 ```bash
@@ -111,11 +111,13 @@ Todos los errores se devuelven como **RFC 9457 Problem Details**
 |---|---|---|
 | `400` | El archivo no es un PDF (extensión, MIME, vacío o contenido inválido) | `InvalidPdfError` |
 | `400` | pdf-extractext lo rechazó (p. ej. "Ya existe un documento con el mismo checksum"); se reenvía su `detail` | `PdfExtractRejectedError` |
+| `413` | El PDF supera `MAX_PDF_SIZE_BYTES` (10 MB). Se corta sin terminar de leerlo | `PdfTooLargeError` |
 | `422` | Falta el campo `file` u otro error de validación de la request | — |
 | `502` | pdf-extractext respondió 5xx o un cuerpo que no se puede interpretar | `PdfExtractUnexpectedResponseError` |
-| `503` | No se pudo conectar con pdf-extractext, o la conexión no se estableció a tiempo (tras agotar los reintentos) | `PdfExtractUnavailableError` |
-| `503` | Circuit Breaker abierto: pdf-extractext deshabilitado temporalmente por fallos repetidos | `PdfExtractCircuitOpenError` |
+| `503` | No se pudo conectar con pdf-extractext, la conexión no se estableció a tiempo (tras agotar los reintentos) o no quedan réplicas sanas (503 de Traefik, sin `Retry-After`) | `PdfExtractUnavailableError` |
+| `503` + `Retry-After` | Circuit Breaker abierto: pdf-extractext deshabilitado temporalmente por fallos repetidos | `PdfExtractCircuitOpenError` |
 | `503` | Bulkhead lleno: demasiadas solicitudes en curso hacia pdf-extractext | `PdfExtractOverloadedError` |
+| `503` + `Retry-After` | pdf-extractext tiene la cola llena (responde 503 con `Retry-After`): se reenvía su `Retry-After` | `PdfExtractOverloadedError` |
 | `504` | pdf-extractext no respondió dentro del timeout | `PdfExtractTimeoutError` |
 | `500` | Error no previsto (el `detail` es genérico, no expone internals) | — |
 
@@ -141,6 +143,7 @@ Las variables desconocidas se ignoran.
 | `BULKHEAD_MAX_CONCURRENT` | `5` | Requests en vuelo hacia pdf-extractext por proceso |
 | `BULKHEAD_MAX_WAITING` | `10` | Requests que pueden esperar un lugar |
 | `BULKHEAD_ACQUIRE_TIMEOUT_SECONDS` | `5` | Máximo de espera por un lugar |
+| `MAX_PDF_SIZE_BYTES` | `10485760` | Tamaño máximo del PDF (10 MB, igual que pdf-extractext). Más grande: `413` |
 
 ## Cómo ejecutar
 
@@ -240,7 +243,7 @@ punto por donde salen requests. Los services no saben que existen. El detalle y 
 | Patrón | Módulo | Qué hace | Por qué así |
 |---|---|---|---|
 | **Retry** | `retry.py` | Reintenta solo fallos de conexión y 5xx en métodos idempotentes; backoff exponencial con jitter | Un POST que agota el timeout **igual crea el documento** en pdf-extractext: reintentarlo duplica trabajo y termina en 400 |
-| **Circuit Breaker** | `circuit_breaker.py` | Tras N fallos consecutivos (transporte, timeout, 5xx) rechaza en el acto; pasado el tiempo de recuperación deja pasar una llamada de prueba | Seguir enviando PDFs a un hoja saturado solo agranda su cola |
+| **Circuit Breaker** | `circuit_breaker.py` | Tras N fallos consecutivos (transporte, timeout, 5xx) rechaza en el acto; pasado el tiempo de recuperación deja pasar una llamada de prueba. Un 503 con `Retry-After` (cola llena del hoja) no cuenta como fallo | Seguir enviando PDFs a un hoja caído solo agranda su cola; uno sano pero ocupado ya se defiende solo |
 | **Bulkhead** | `bulkhead.py` | Acota las requests en vuelo y en espera hacia pdf-extractext; el exceso recibe 503 inmediato | Cada request retiene un PDF en memoria; sin tope, un hoja lento agota la memoria del orquestador |
 
 Orden por cada intento: `Retry → Circuit Breaker → Bulkhead → red`. Si el circuito está abierto

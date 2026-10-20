@@ -163,3 +163,20 @@ def test_post_documents_informa_fallos_de_pdf_extractext(
 
     assert response.status_code == expected_status
     assert response.headers["content-type"] == "application/problem+json"
+
+
+@respx.mock
+def test_post_documents_reenvia_la_sobrecarga_de_pdf_extractext_con_retry_after(
+    client: TestClient,
+) -> None:
+    respx.post(DOCUMENTS_URL).mock(
+        return_value=httpx.Response(
+            503, json={"detail": "Cola de extraccion llena"}, headers={"Retry-After": "3"}
+        )
+    )
+
+    response = post_pdf(client, name="informe")
+
+    assert response.status_code == 503
+    assert response.headers["retry-after"] == "3"
+    assert response.headers["content-type"] == "application/problem+json"

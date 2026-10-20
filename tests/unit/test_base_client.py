@@ -402,3 +402,37 @@ async def test_si_se_cancela_la_llamada_de_prueba_el_circuito_no_queda_trabado()
     assert response.status_code == 200
     assert breaker.state is CircuitState.CLOSED
     await client.aclose()
+
+
+# --- 503 por carga (pdf-extractext con la cola llena) ----------------------------
+
+
+def load_shedding() -> httpx.Response:
+    """Lo que responde pdf-extractext con la cola llena: está sano, solo ocupado."""
+    return httpx.Response(503, headers={"Retry-After": "1"})
+
+
+@respx.mock
+async def test_un_503_con_retry_after_no_cuenta_como_fallo_para_el_breaker() -> None:
+    respx.post(f"{BASE_URL}/x").mock(return_value=load_shedding())
+    breaker = make_breaker(threshold=2)
+
+    async with BaseClient(BASE_URL, timeout_seconds=5, circuit_breaker=breaker) as client:
+        for _ in range(5):
+            response = await client._request("POST", "/x")
+            assert response.status_code == 503
+
+    assert breaker.state is CircuitState.CLOSED
+
+
+@respx.mock
+async def test_un_503_con_retry_after_en_half_open_deja_la_prueba_para_la_siguiente() -> None:
+    respx.post(f"{BASE_URL}/x").mock(side_effect=[load_shedding(), httpx.Response(200)])
+    breaker = half_open_breaker()
+
+    async with BaseClient(BASE_URL, timeout_seconds=5, circuit_breaker=breaker) as client:
+        await client._request("POST", "/x")
+        assert breaker.state is CircuitState.HALF_OPEN
+        await client._request("POST", "/x")
+
+    assert breaker.state is CircuitState.CLOSED

@@ -130,3 +130,20 @@ def test_excepcion_inesperada_se_traduce_a_500_generico() -> None:
     assert "secreto interno" not in body["detail"]
     assert "secreto interno" not in str(body)
     assert body["instance"].endswith("/falla")
+
+
+@pytest.mark.parametrize(("retry_after", "header"), [(2, "2"), (1.2, "2"), (0.0, "1")])
+def test_las_excepciones_con_retry_after_agregan_el_header(retry_after: float, header: str) -> None:
+    exc = PdfExtractOverloadedError("saturado", retry_after_seconds=retry_after)
+
+    response = make_client(exc).get("/boom")
+
+    assert response.status_code == 503
+    assert response.headers["retry-after"] == header
+
+
+def test_sin_retry_after_no_se_agrega_el_header() -> None:
+    response = make_client(PdfExtractUnavailableError("no conecta")).get("/boom")
+
+    assert response.status_code == 503
+    assert "retry-after" not in response.headers

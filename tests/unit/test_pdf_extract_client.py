@@ -185,3 +185,42 @@ async def test_create_document_trata_el_timeout_de_conexion_como_no_disponible()
     async with PdfExtractClient(base_url=BASE_URL, timeout_seconds=5) as client:
         with pytest.raises(PdfExtractUnavailableError):
             await client.create_document(make_document(), name="informe")
+
+
+@respx.mock
+async def test_create_document_traduce_la_cola_llena_a_sobrecarga_con_retry_after() -> None:
+    response = problem(503, "Servicio saturado: reintentar mas tarde")
+    response.headers["Retry-After"] = "2"
+    respx.post(DOCUMENTS_URL).mock(return_value=response)
+
+    async with PdfExtractClient(base_url=BASE_URL, timeout_seconds=5) as client:
+        with pytest.raises(PdfExtractOverloadedError, match="saturado") as caught:
+            await client.create_document(make_document(), name="informe")
+
+    assert caught.value.retry_after_seconds == 2
+
+
+@respx.mock
+async def test_create_document_trata_un_503_sin_retry_after_como_no_disponible() -> None:
+    # Así responde Traefik cuando no queda ninguna réplica sana de pdf-extractext.
+    respx.post(DOCUMENTS_URL).mock(return_value=httpx.Response(503, text="no available server"))
+
+    async with PdfExtractClient(base_url=BASE_URL, timeout_seconds=5) as client:
+        with pytest.raises(PdfExtractUnavailableError):
+            await client.create_document(make_document(), name="informe")
+
+
+@respx.mock
+async def test_create_document_informa_cuando_reintentar_con_el_circuito_abierto() -> None:
+    respx.post(DOCUMENTS_URL).mock(side_effect=httpx.ConnectError("refused"))
+    breaker = CircuitBreaker(failure_threshold=1, recovery_timeout_seconds=30)
+
+    async with PdfExtractClient(
+        base_url=BASE_URL, timeout_seconds=5, circuit_breaker=breaker
+    ) as client:
+        with pytest.raises(PdfExtractUnavailableError):
+            await client.create_document(make_document(), name="informe")
+        with pytest.raises(PdfExtractCircuitOpenError) as caught:
+            await client.create_document(make_document(), name="informe")
+
+    assert caught.value.retry_after_seconds == pytest.approx(30, abs=1)

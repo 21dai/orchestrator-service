@@ -62,7 +62,7 @@ async def test_get_pdf_extract_client_usa_los_dos_timeouts() -> None:
     settings = get_settings()
 
     assert client._client.timeout.connect == settings.http_connect_timeout_seconds
-    assert client._client.timeout.read == settings.http_timeout_seconds
+    assert client._client.timeout.read == settings.pdf_extract_timeout_seconds
 
     await client.aclose()
     get_pdf_extract_client.cache_clear()

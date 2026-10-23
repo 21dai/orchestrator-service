@@ -7,8 +7,8 @@ def test_settings_tiene_defaults_para_desarrollo_local() -> None:
     settings = Settings(_env_file=None)
 
     assert settings.pdf_extract_base_url == "http://localhost:8000"
-    # Local, document-store corre en otro puerto que pdf-extractext.
-    assert settings.document_store_base_url == "http://localhost:8001"
+    # Local: pdf-extractext en :8000, el orquestador en :8001 y document-store en :8002.
+    assert settings.document_store_base_url == "http://localhost:8002"
 
 
 def test_settings_lee_variables_del_env_file(tmp_path: Path) -> None:

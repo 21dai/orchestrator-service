@@ -20,9 +20,9 @@ class Settings(BaseSettings):
     pdf_extract_base_url: str = "http://localhost:8000"
 
     # URL base del microservicio que persiste los documentos (document-store).
-    # Local corre en :8001 para no chocar con pdf-extractext. En Docker,
+    # Local corre en :8002 (pdf-extractext usa :8000 y el orquestador :8001). En Docker,
     # DOCUMENT_STORE_BASE_URL=http://document-store:8000
-    document_store_base_url: str = "http://localhost:8001"
+    document_store_base_url: str = "http://localhost:8002"
 
     # Timeout de lectura/escritura (en segundos) de cada microservicio.
     # pdf-extractext responde 503 antes de 25 s si no llega a extraer a tiempo

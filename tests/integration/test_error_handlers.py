@@ -10,6 +10,13 @@ from fastapi.testclient import TestClient
 
 from app.errors import register_error_handlers
 from app.exceptions import (
+    DocumentAlreadyExistsError,
+    DocumentStoreCircuitOpenError,
+    DocumentStoreOverloadedError,
+    DocumentStoreRejectedError,
+    DocumentStoreTimeoutError,
+    DocumentStoreUnavailableError,
+    DocumentStoreUnexpectedResponseError,
     InvalidPdfError,
     OrchestratorError,
     PdfExtractCircuitOpenError,
@@ -147,3 +154,28 @@ def test_sin_retry_after_no_se_agrega_el_header() -> None:
 
     assert response.status_code == 503
     assert "retry-after" not in response.headers
+
+
+@pytest.mark.parametrize(
+    ("exc", "expected_status"),
+    [
+        (DocumentAlreadyExistsError("Ya existe un documento", checksum="a" * 64), 409),
+        # Otro 4xx de document-store es un contrato roto: falla del gateway.
+        (DocumentStoreRejectedError("datos inválidos"), 502),
+        (DocumentStoreUnexpectedResponseError("respuesta rara"), 502),
+        (DocumentStoreUnavailableError("no conecta"), 503),
+        (DocumentStoreCircuitOpenError("circuito abierto"), 503),
+        (DocumentStoreOverloadedError("bulkhead lleno"), 503),
+        (DocumentStoreTimeoutError("tardó demasiado"), 504),
+    ],
+)
+def test_excepciones_de_document_store_se_traducen_a_problem_details(
+    exc: OrchestratorError, expected_status: int
+) -> None:
+    response = make_client(exc).get("/boom")
+
+    assert response.status_code == expected_status
+    assert response.headers["content-type"] == "application/problem+json"
+    body = response.json()
+    assert body["status"] == expected_status
+    assert body["detail"] == str(exc)

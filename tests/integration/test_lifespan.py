@@ -1,6 +1,6 @@
 from fastapi.testclient import TestClient
 
-from app.dependencies import get_pdf_extract_client
+from app.dependencies import get_document_store_client, get_pdf_extract_client
 from app.main import app
 
 
@@ -23,3 +23,16 @@ def test_el_client_de_pdf_extractext_se_cierra_al_apagar_la_app() -> None:
     # Un arranque posterior obtiene un client nuevo, no el cerrado.
     with TestClient(app):
         assert get_pdf_extract_client() is not pdf_client
+
+
+def test_el_client_de_document_store_se_crea_al_arrancar_y_se_cierra_al_apagar() -> None:
+    get_document_store_client.cache_clear()
+
+    with TestClient(app):
+        assert get_document_store_client.cache_info().currsize == 1
+        store_client = get_document_store_client()
+        assert not store_client._client.is_closed
+
+    assert store_client._client.is_closed
+    with TestClient(app):
+        assert get_document_store_client() is not store_client

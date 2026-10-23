@@ -90,10 +90,15 @@ async def close_document_store_client() -> None:
 
 
 PdfExtractClientDep = Annotated[PdfExtractClient, Depends(get_pdf_extract_client)]
+DocumentStoreClientDep = Annotated[DocumentStoreClient, Depends(get_document_store_client)]
 
 
-def get_document_service(pdf_extract_client: PdfExtractClientDep) -> DocumentService:
-    return DocumentService(pdf_extract_client=pdf_extract_client)
+def get_document_service(
+    pdf_extract_client: PdfExtractClientDep, document_store_client: DocumentStoreClientDep
+) -> DocumentService:
+    return DocumentService(
+        pdf_extract_client=pdf_extract_client, document_store_client=document_store_client
+    )
 
 
 DocumentServiceDep = Annotated[DocumentService, Depends(get_document_service)]

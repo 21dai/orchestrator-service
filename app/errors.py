@@ -26,6 +26,7 @@ from app.exceptions import (
     DocumentStoreTimeoutError,
     DocumentStoreUnavailableError,
     DocumentStoreUnexpectedResponseError,
+    InvalidDocumentNameError,
     InvalidPdfError,
     OrchestratorError,
     PdfExtractCircuitOpenError,
@@ -44,6 +45,7 @@ PROBLEM_JSON = "application/problem+json"
 # distinguirlos de errores propios del orquestador.
 STATUS_BY_EXCEPTION: dict[type[OrchestratorError], int] = {
     InvalidPdfError: status.HTTP_400_BAD_REQUEST,
+    InvalidDocumentNameError: status.HTTP_400_BAD_REQUEST,
     PdfTooLargeError: status.HTTP_413_CONTENT_TOO_LARGE,
     PdfExtractRejectedError: status.HTTP_400_BAD_REQUEST,
     PdfExtractUnexpectedResponseError: status.HTTP_502_BAD_GATEWAY,

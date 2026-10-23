@@ -1,9 +1,10 @@
+import hashlib
 from dataclasses import dataclass
 from datetime import datetime
 
 from pydantic import BaseModel, Field
 
-from app.schemas.pdf_extract import ExtractedDocument
+from app.schemas.document_store import StoredDocument
 
 
 @dataclass(frozen=True, slots=True)
@@ -23,34 +24,39 @@ class PdfDocument:
     def size_bytes(self) -> int:
         return len(self.content)
 
+    @property
+    def checksum(self) -> str:
+        """SHA-256 hexadecimal de los bytes: identifica al PDF en document-store."""
+        return hashlib.sha256(self.content).hexdigest()
+
 
 class ProcessedDocument(BaseModel):
-    """Respuesta pública del orquestador: el PDF ya procesado por pdf-extractext.
+    """Respuesta pública del orquestador: el PDF procesado y guardado.
 
-    Traduce el contrato del microservicio hoja a los nombres del orquestador
+    Traduce el contrato de document-store a los nombres del orquestador
     (Blueprint, §4: no se exponen modelos internos sin traducción).
     """
 
-    document_id: int = Field(description="Identificador del documento en pdf-extractext.")
+    document_id: int = Field(description="Identificador del documento en document-store.")
     name: str = Field(description="Nombre con el que se registró el documento.")
     filename: str = Field(description="Nombre original del archivo subido.")
     size_bytes: int = Field(ge=0, description="Tamaño del archivo en bytes.")
-    checksum: str = Field(description="SHA-256 del archivo, calculado por pdf-extractext.")
+    checksum: str = Field(description="SHA-256 del archivo, calculado por el orquestador.")
+    page_count: int = Field(ge=0, description="Cantidad de páginas del PDF.")
     is_processed: bool = Field(description="Si el texto ya fue extraído.")
-    extracted_text: str | None = Field(default=None, description="Texto extraído del PDF.")
-    processed_at: datetime = Field(
-        description="Momento en que pdf-extractext registró el documento."
-    )
+    extracted_text: str = Field(description="Texto extraído del PDF, en Markdown.")
+    processed_at: datetime = Field(description="Momento en que se guardó el documento.")
 
     @classmethod
-    def from_extracted(cls, extracted: ExtractedDocument) -> ProcessedDocument:
+    def from_stored(cls, stored: StoredDocument) -> ProcessedDocument:
         return cls(
-            document_id=extracted.id,
-            name=extracted.name,
-            filename=extracted.original_filename,
-            size_bytes=extracted.file_size,
-            checksum=extracted.checksum,
-            is_processed=extracted.is_processed,
-            extracted_text=extracted.extracted_text,
-            processed_at=extracted.created_at,
+            document_id=stored.id,
+            name=stored.name,
+            filename=stored.original_filename,
+            size_bytes=stored.file_size,
+            checksum=stored.checksum,
+            page_count=stored.page_count,
+            is_processed=stored.is_processed,
+            extracted_text=stored.extracted_text,
+            processed_at=stored.created_at,
         )

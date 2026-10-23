@@ -3,6 +3,8 @@ from app.exceptions import InvalidPdfError
 PDF_EXTENSION = ".pdf"
 PDF_CONTENT_TYPE = "application/pdf"
 PDF_MAGIC_BYTES = b"%PDF-"
+#: Largo máximo del nombre del archivo que acepta document-store.
+MAX_FILENAME_LENGTH = 255
 
 
 def validate_pdf(filename: str, content_type: str | None, content: bytes) -> None:
@@ -16,6 +18,11 @@ def validate_pdf(filename: str, content_type: str | None, content: bytes) -> Non
     if not filename.lower().endswith(PDF_EXTENSION):
         raise InvalidPdfError(
             f"El archivo debe tener extensión {PDF_EXTENSION} (recibido: {filename!r})."
+        )
+
+    if len(filename) > MAX_FILENAME_LENGTH:
+        raise InvalidPdfError(
+            f"El nombre del archivo no puede superar los {MAX_FILENAME_LENGTH} caracteres."
         )
 
     if content_type != PDF_CONTENT_TYPE:

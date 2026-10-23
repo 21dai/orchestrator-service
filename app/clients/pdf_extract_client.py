@@ -10,9 +10,8 @@ from app.exceptions import (
     PdfExtractUnexpectedResponseError,
 )
 from app.schemas.documents import PdfDocument
-from app.schemas.pdf_extract import ExtractedDocument, ExtractionResult
+from app.schemas.pdf_extract import ExtractionResult
 
-DOCUMENTS_PATH = "/api/v1/documents"
 EXTRACT_PATH = "/extract"
 
 ERRORS = UpstreamErrors(
@@ -36,7 +35,8 @@ class PdfExtractClient(BaseClient):
         """`POST /extract`: envía el PDF y devuelve su texto y cantidad de páginas.
 
         Es el endpoint sin estado de pdf-extractext: no guarda nada, así que
-        el mismo PDF se puede mandar las veces que haga falta.
+        el mismo PDF se puede mandar las veces que haga falta. Guardar el
+        documento es trabajo de document-store.
         """
         response = await self._call(
             ERRORS,
@@ -47,22 +47,6 @@ class PdfExtractClient(BaseClient):
 
         if response.status_code == httpx.codes.OK:
             return self._parse(ERRORS, response, ExtractionResult)
-        if response.is_client_error:
-            raise PdfExtractRejectedError(error_detail(response))
-        self._raise_unexpected(ERRORS, response)
-
-    async def create_document(self, document: PdfDocument, name: str) -> ExtractedDocument:
-        """`POST /api/v1/documents`: envía el PDF y devuelve el documento con su texto."""
-        response = await self._call(
-            ERRORS,
-            "POST",
-            DOCUMENTS_PATH,
-            data={"name": name},
-            files={"file": (document.filename, document.content, document.content_type)},
-        )
-
-        if response.status_code == httpx.codes.CREATED:
-            return self._parse(ERRORS, response, ExtractedDocument)
         if response.is_client_error:
             raise PdfExtractRejectedError(error_detail(response))
         self._raise_unexpected(ERRORS, response)

@@ -22,6 +22,10 @@ class InvalidPdfError(OrchestratorError):
     """El archivo recibido no es un PDF válido."""
 
 
+class InvalidDocumentNameError(OrchestratorError):
+    """El nombre del documento no es válido para document-store (HTTP 400)."""
+
+
 class PdfTooLargeError(OrchestratorError):
     """El archivo recibido supera el tamaño máximo permitido (HTTP 413)."""
 
@@ -38,7 +42,7 @@ class PdfExtractError(OrchestratorError):
 
 
 class PdfExtractRejectedError(PdfExtractError):
-    """pdf-extractext rechazó el documento (4xx): p. ej. checksum duplicado."""
+    """pdf-extractext rechazó el PDF (4xx): p. ej. un PDF dañado del que no puede extraer."""
 
 
 class PdfExtractUnexpectedResponseError(PdfExtractError):

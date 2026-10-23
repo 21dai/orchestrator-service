@@ -6,7 +6,14 @@ Son internos al orquestador: lo que se expone al cliente final se traduce en
 
 from datetime import datetime
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+
+
+class ExtractionResult(BaseModel):
+    """Respuesta de `POST /extract`: el texto en Markdown y la cantidad de páginas."""
+
+    content: str
+    page_count: int = Field(ge=0)
 
 
 class ExtractedDocument(BaseModel):

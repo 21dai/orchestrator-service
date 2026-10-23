@@ -19,6 +19,13 @@ from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.exceptions import (
+    DocumentAlreadyExistsError,
+    DocumentStoreCircuitOpenError,
+    DocumentStoreOverloadedError,
+    DocumentStoreRejectedError,
+    DocumentStoreTimeoutError,
+    DocumentStoreUnavailableError,
+    DocumentStoreUnexpectedResponseError,
     InvalidPdfError,
     OrchestratorError,
     PdfExtractCircuitOpenError,
@@ -32,8 +39,8 @@ from app.exceptions import (
 
 PROBLEM_JSON = "application/problem+json"
 
-# Qué código HTTP corresponde a cada excepción de dominio. Los fallos del
-# microservicio hoja se reportan con códigos de gateway (502/503/504) para
+# Qué código HTTP corresponde a cada excepción de dominio. Los fallos de los
+# microservicios hoja se reportan con códigos de gateway (502/503/504) para
 # distinguirlos de errores propios del orquestador.
 STATUS_BY_EXCEPTION: dict[type[OrchestratorError], int] = {
     InvalidPdfError: status.HTTP_400_BAD_REQUEST,
@@ -44,6 +51,14 @@ STATUS_BY_EXCEPTION: dict[type[OrchestratorError], int] = {
     PdfExtractCircuitOpenError: status.HTTP_503_SERVICE_UNAVAILABLE,
     PdfExtractOverloadedError: status.HTTP_503_SERVICE_UNAVAILABLE,
     PdfExtractTimeoutError: status.HTTP_504_GATEWAY_TIMEOUT,
+    # El PDF ya estaba guardado: el cliente recibe un conflicto claro.
+    DocumentAlreadyExistsError: status.HTTP_409_CONFLICT,
+    DocumentStoreRejectedError: status.HTTP_502_BAD_GATEWAY,
+    DocumentStoreUnexpectedResponseError: status.HTTP_502_BAD_GATEWAY,
+    DocumentStoreUnavailableError: status.HTTP_503_SERVICE_UNAVAILABLE,
+    DocumentStoreCircuitOpenError: status.HTTP_503_SERVICE_UNAVAILABLE,
+    DocumentStoreOverloadedError: status.HTTP_503_SERVICE_UNAVAILABLE,
+    DocumentStoreTimeoutError: status.HTTP_504_GATEWAY_TIMEOUT,
 }
 
 

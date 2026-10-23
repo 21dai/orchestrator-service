@@ -7,6 +7,7 @@ from fastapi import Depends
 
 from app.clients.bulkhead import Bulkhead
 from app.clients.circuit_breaker import CircuitBreaker
+from app.clients.document_store_client import DocumentStoreClient
 from app.clients.pdf_extract_client import PdfExtractClient
 from app.clients.retry import RetryPolicy
 from app.config import Settings, get_settings
@@ -62,6 +63,30 @@ async def close_pdf_extract_client() -> None:
     if get_pdf_extract_client.cache_info().currsize:
         await get_pdf_extract_client().aclose()
         get_pdf_extract_client.cache_clear()
+
+
+@lru_cache
+def get_document_store_client() -> DocumentStoreClient:
+    """Un único client por proceso, con su propio Circuit Breaker y Bulkhead.
+
+    Separados de los de pdf-extractext: si un servicio falla, no se corta el
+    tráfico hacia el otro. Se crea y se cierra en el lifespan, como aquel.
+    """
+    settings = get_settings()
+    return DocumentStoreClient(
+        base_url=settings.document_store_base_url,
+        timeout_seconds=settings.document_store_timeout_seconds,
+        connect_timeout_seconds=settings.http_connect_timeout_seconds,
+        retry_policy=build_retry_policy(settings),
+        circuit_breaker=build_circuit_breaker(settings, name="document-store"),
+        bulkhead=build_bulkhead(settings, name="document-store"),
+    )
+
+
+async def close_document_store_client() -> None:
+    if get_document_store_client.cache_info().currsize:
+        await get_document_store_client().aclose()
+        get_document_store_client.cache_clear()
 
 
 PdfExtractClientDep = Annotated[PdfExtractClient, Depends(get_pdf_extract_client)]

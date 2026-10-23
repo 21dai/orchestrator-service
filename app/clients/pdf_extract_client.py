@@ -1,9 +1,6 @@
 import httpx
-from pydantic import ValidationError
 
-from app.clients.base_client import BaseClient, retry_after_seconds
-from app.clients.bulkhead import BulkheadFullError
-from app.clients.circuit_breaker import CircuitOpenError
+from app.clients.base_client import BaseClient, UpstreamErrors, error_detail
 from app.exceptions import (
     PdfExtractCircuitOpenError,
     PdfExtractOverloadedError,
@@ -17,6 +14,15 @@ from app.schemas.pdf_extract import ExtractedDocument
 
 DOCUMENTS_PATH = "/api/v1/documents"
 
+ERRORS = UpstreamErrors(
+    service="pdf-extractext",
+    unavailable=PdfExtractUnavailableError,
+    timeout=PdfExtractTimeoutError,
+    circuit_open=PdfExtractCircuitOpenError,
+    overloaded=PdfExtractOverloadedError,
+    unexpected=PdfExtractUnexpectedResponseError,
+)
+
 
 class PdfExtractClient(BaseClient):
     """Cliente del microservicio de extracción de texto (pdf-extractext).
@@ -27,69 +33,16 @@ class PdfExtractClient(BaseClient):
 
     async def create_document(self, document: PdfDocument, name: str) -> ExtractedDocument:
         """`POST /api/v1/documents`: envía el PDF y devuelve el documento con su texto."""
-        try:
-            response = await self._request(
-                "POST",
-                DOCUMENTS_PATH,
-                data={"name": name},
-                files={"file": (document.filename, document.content, document.content_type)},
-            )
-        except BulkheadFullError as exc:
-            raise PdfExtractOverloadedError(
-                "Demasiadas solicitudes en curso hacia pdf-extractext; reintentar más tarde."
-            ) from exc
-        except CircuitOpenError as exc:
-            raise PdfExtractCircuitOpenError(
-                "pdf-extractext está temporalmente deshabilitado por fallos repetidos; "
-                f"reintentar en {exc.retry_after_seconds:.0f} s.",
-                retry_after_seconds=exc.retry_after_seconds,
-            ) from exc
-        except httpx.ConnectTimeout as exc:
-            # Es un timeout, pero de conexión: el hoja no está escuchando.
-            raise PdfExtractUnavailableError("No se pudo conectar con pdf-extractext.") from exc
-        except httpx.TimeoutException as exc:
-            raise PdfExtractTimeoutError(
-                "pdf-extractext no respondió dentro del timeout configurado."
-            ) from exc
-        except httpx.TransportError as exc:
-            raise PdfExtractUnavailableError("No se pudo conectar con pdf-extractext.") from exc
-
-        if response.status_code == httpx.codes.CREATED:
-            return self._parse_document(response)
-
-        detail = self._error_detail(response)
-        if response.is_client_error:
-            raise PdfExtractRejectedError(detail)
-        if response.status_code == httpx.codes.SERVICE_UNAVAILABLE:
-            retry_after = retry_after_seconds(response)
-            if retry_after is None:
-                # Sin Retry-After lo responde Traefik: no queda ninguna réplica sana.
-                raise PdfExtractUnavailableError(f"pdf-extractext no está disponible: {detail}")
-            # Con Retry-After es la cola de pdf-extractext llena: el cliente
-            # puede volver a intentar en ese tiempo.
-            raise PdfExtractOverloadedError(
-                f"pdf-extractext está saturado: {detail}", retry_after_seconds=retry_after
-            )
-        raise PdfExtractUnexpectedResponseError(
-            f"pdf-extractext respondió {response.status_code}: {detail}"
+        response = await self._call(
+            ERRORS,
+            "POST",
+            DOCUMENTS_PATH,
+            data={"name": name},
+            files={"file": (document.filename, document.content, document.content_type)},
         )
 
-    @staticmethod
-    def _parse_document(response: httpx.Response) -> ExtractedDocument:
-        try:
-            return ExtractedDocument.model_validate_json(response.content)
-        except ValidationError as exc:
-            raise PdfExtractUnexpectedResponseError(
-                "La respuesta de pdf-extractext no tiene el formato esperado."
-            ) from exc
-
-    @staticmethod
-    def _error_detail(response: httpx.Response) -> str:
-        """Extrae `detail` de un Problem Details; si no hay, usa el cuerpo crudo."""
-        try:
-            body = response.json()
-        except ValueError:
-            return response.text
-        if isinstance(body, dict) and isinstance(body.get("detail"), str):
-            return body["detail"]
-        return response.text
+        if response.status_code == httpx.codes.CREATED:
+            return self._parse(ERRORS, response, ExtractedDocument)
+        if response.is_client_error:
+            raise PdfExtractRejectedError(error_detail(response))
+        self._raise_unexpected(ERRORS, response)

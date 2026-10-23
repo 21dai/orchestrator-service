@@ -4,7 +4,12 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 from app.config import get_settings
-from app.dependencies import close_pdf_extract_client, get_pdf_extract_client
+from app.dependencies import (
+    close_document_store_client,
+    close_pdf_extract_client,
+    get_document_store_client,
+    get_pdf_extract_client,
+)
 from app.errors import register_error_handlers
 from app.routers import documents, health
 
@@ -19,8 +24,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     construir cada una su propio client). Al apagar, los cierra.
     """
     get_pdf_extract_client()
+    get_document_store_client()
     yield
     await close_pdf_extract_client()
+    await close_document_store_client()
 
 
 def create_app() -> FastAPI:

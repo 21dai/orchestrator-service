@@ -50,7 +50,7 @@ def get_pdf_extract_client() -> PdfExtractClient:
     settings = get_settings()
     return PdfExtractClient(
         base_url=settings.pdf_extract_base_url,
-        timeout_seconds=settings.http_timeout_seconds,
+        timeout_seconds=settings.pdf_extract_timeout_seconds,
         connect_timeout_seconds=settings.http_connect_timeout_seconds,
         retry_policy=build_retry_policy(settings),
         circuit_breaker=build_circuit_breaker(settings, name="pdf-extractext"),

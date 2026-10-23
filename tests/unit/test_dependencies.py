@@ -9,13 +9,17 @@ from app.dependencies import (
 from app.services.document_service import DocumentService
 
 
-def test_get_document_service_inyecta_el_client_en_el_service() -> None:
-    gateway = object()
+def test_get_document_service_inyecta_los_dos_clients_en_el_service() -> None:
+    extractor, store = object(), object()
 
-    service = get_document_service(pdf_extract_client=gateway)  # type: ignore[arg-type]
+    service = get_document_service(
+        pdf_extract_client=extractor,  # type: ignore[arg-type]
+        document_store_client=store,  # type: ignore[arg-type]
+    )
 
     assert isinstance(service, DocumentService)
-    assert service._pdf_extract is gateway
+    assert service._pdf_extract is extractor
+    assert service._document_store is store
 
 
 async def test_get_pdf_extract_client_devuelve_un_singleton_cacheado() -> None:

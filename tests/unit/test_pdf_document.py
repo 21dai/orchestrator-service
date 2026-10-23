@@ -1,4 +1,5 @@
 import dataclasses
+import hashlib
 
 import pytest
 
@@ -26,3 +27,14 @@ def test_pdf_document_es_inmutable() -> None:
 
     with pytest.raises(dataclasses.FrozenInstanceError):
         document.filename = "otro.pdf"  # type: ignore[misc]
+
+
+def test_pdf_document_calcula_el_checksum_sha256_de_su_contenido() -> None:
+    document = PdfDocument(
+        filename="informe.pdf",
+        content_type="application/pdf",
+        content=PDF_CONTENT,
+    )
+
+    assert document.checksum == hashlib.sha256(PDF_CONTENT).hexdigest()
+    assert len(document.checksum) == 64

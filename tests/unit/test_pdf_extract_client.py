@@ -1,4 +1,4 @@
-from datetime import UTC, datetime
+"""Client de pdf-extractext: `POST /extract`, la extracción sin estado."""
 
 import httpx
 import pytest
@@ -16,23 +16,12 @@ from app.exceptions import (
     PdfExtractUnexpectedResponseError,
 )
 from app.schemas.documents import PdfDocument
-from app.schemas.pdf_extract import ExtractedDocument, ExtractionResult
+from app.schemas.pdf_extract import ExtractionResult
 
 BASE_URL = "http://pdf-extractext:8000"
-DOCUMENTS_URL = f"{BASE_URL}/api/v1/documents"
+EXTRACT_URL = f"{BASE_URL}/extract"
 PDF_CONTENT = b"%PDF-1.4\n%contenido de prueba"
-
-DOCUMENT_RESPONSE = {
-    "id": 7,
-    "name": "informe",
-    "original_filename": "informe.pdf",
-    "file_size": len(PDF_CONTENT),
-    "checksum": "a" * 64,
-    "extracted_text": "Texto extraido del PDF",
-    "is_processed": True,
-    "created_at": "2026-09-17T10:00:00Z",
-    "updated_at": "2026-09-17T10:00:01Z",
-}
+EXTRACT_RESPONSE = {"content": "# Informe\n\nTexto extraido", "page_count": 3}
 
 
 def make_document() -> PdfDocument:
@@ -47,189 +36,10 @@ def problem(status: int, detail: str) -> httpx.Response:
             "title": "Error",
             "status": status,
             "detail": detail,
-            "instance": DOCUMENTS_URL,
+            "instance": EXTRACT_URL,
         },
         headers={"content-type": "application/problem+json"},
     )
-
-
-@respx.mock
-async def test_create_document_envia_multipart_y_mapea_la_respuesta() -> None:
-    route = respx.post(DOCUMENTS_URL).mock(return_value=httpx.Response(201, json=DOCUMENT_RESPONSE))
-
-    async with PdfExtractClient(base_url=BASE_URL, timeout_seconds=5) as client:
-        result = await client.create_document(make_document(), name="informe")
-
-    sent = route.calls.last.request
-    assert sent.headers["content-type"].startswith("multipart/form-data")
-    assert b'name="name"\r\n\r\ninforme' in sent.content
-    assert b'filename="informe.pdf"' in sent.content
-    assert b"Content-Type: application/pdf" in sent.content
-    assert PDF_CONTENT in sent.content
-
-    assert result == ExtractedDocument(
-        id=7,
-        name="informe",
-        original_filename="informe.pdf",
-        file_size=len(PDF_CONTENT),
-        checksum="a" * 64,
-        extracted_text="Texto extraido del PDF",
-        is_processed=True,
-        created_at=datetime(2026, 9, 17, 10, 0, 0, tzinfo=UTC),
-        updated_at=datetime(2026, 9, 17, 10, 0, 1, tzinfo=UTC),
-    )
-
-
-@respx.mock
-async def test_create_document_acepta_extracted_text_nulo() -> None:
-    respx.post(DOCUMENTS_URL).mock(
-        return_value=httpx.Response(201, json={**DOCUMENT_RESPONSE, "extracted_text": None})
-    )
-
-    async with PdfExtractClient(base_url=BASE_URL, timeout_seconds=5) as client:
-        result = await client.create_document(make_document(), name="informe")
-
-    assert result.extracted_text is None
-
-
-@respx.mock
-async def test_create_document_traduce_400_a_rechazo_con_el_detalle() -> None:
-    respx.post(DOCUMENTS_URL).mock(
-        return_value=problem(400, "Ya existe un documento con el mismo checksum")
-    )
-
-    async with PdfExtractClient(base_url=BASE_URL, timeout_seconds=5) as client:
-        with pytest.raises(PdfExtractRejectedError, match="mismo checksum"):
-            await client.create_document(make_document(), name="informe")
-
-
-@respx.mock
-async def test_create_document_usa_el_body_crudo_si_el_detalle_no_es_texto() -> None:
-    # Los 422 de FastAPI traen `detail` como lista, no como string.
-    respx.post(DOCUMENTS_URL).mock(
-        return_value=httpx.Response(
-            422, json={"detail": [{"loc": ["body", "file"], "msg": "campo requerido"}]}
-        )
-    )
-
-    async with PdfExtractClient(base_url=BASE_URL, timeout_seconds=5) as client:
-        with pytest.raises(PdfExtractRejectedError, match="campo requerido"):
-            await client.create_document(make_document(), name="informe")
-
-
-@respx.mock
-async def test_create_document_traduce_5xx_a_respuesta_inesperada() -> None:
-    respx.post(DOCUMENTS_URL).mock(return_value=httpx.Response(500, text="boom"))
-
-    async with PdfExtractClient(base_url=BASE_URL, timeout_seconds=5) as client:
-        with pytest.raises(PdfExtractUnexpectedResponseError, match="500"):
-            await client.create_document(make_document(), name="informe")
-
-
-@respx.mock
-async def test_create_document_traduce_body_invalido_a_respuesta_inesperada() -> None:
-    respx.post(DOCUMENTS_URL).mock(return_value=httpx.Response(201, json={"id": "x"}))
-
-    async with PdfExtractClient(base_url=BASE_URL, timeout_seconds=5) as client:
-        with pytest.raises(PdfExtractUnexpectedResponseError):
-            await client.create_document(make_document(), name="informe")
-
-
-@respx.mock
-async def test_create_document_traduce_timeout() -> None:
-    respx.post(DOCUMENTS_URL).mock(side_effect=httpx.ReadTimeout)
-
-    async with PdfExtractClient(base_url=BASE_URL, timeout_seconds=5) as client:
-        with pytest.raises(PdfExtractTimeoutError):
-            await client.create_document(make_document(), name="informe")
-
-
-@respx.mock
-async def test_create_document_traduce_servicio_no_disponible() -> None:
-    respx.post(DOCUMENTS_URL).mock(side_effect=httpx.ConnectError)
-
-    async with PdfExtractClient(base_url=BASE_URL, timeout_seconds=5) as client:
-        with pytest.raises(PdfExtractUnavailableError):
-            await client.create_document(make_document(), name="informe")
-
-
-@respx.mock
-async def test_create_document_traduce_el_circuito_abierto() -> None:
-    respx.post(DOCUMENTS_URL).mock(side_effect=httpx.ConnectError("refused"))
-    breaker = CircuitBreaker(failure_threshold=1, recovery_timeout_seconds=30)
-
-    async with PdfExtractClient(
-        base_url=BASE_URL, timeout_seconds=5, circuit_breaker=breaker
-    ) as client:
-        with pytest.raises(PdfExtractUnavailableError):
-            await client.create_document(make_document(), name="informe")
-
-        with pytest.raises(PdfExtractCircuitOpenError, match="temporalmente"):
-            await client.create_document(make_document(), name="informe")
-
-
-async def test_create_document_traduce_el_bulkhead_lleno() -> None:
-    bulkhead = Bulkhead(max_concurrent=1, max_waiting=0, acquire_timeout_seconds=1)
-    async with bulkhead.slot():  # alguien más ya ocupa el único slot
-        async with PdfExtractClient(
-            base_url=BASE_URL, timeout_seconds=5, bulkhead=bulkhead
-        ) as client:
-            with pytest.raises(PdfExtractOverloadedError, match="en curso"):
-                await client.create_document(make_document(), name="informe")
-
-
-@respx.mock
-async def test_create_document_trata_el_timeout_de_conexion_como_no_disponible() -> None:
-    respx.post(DOCUMENTS_URL).mock(side_effect=httpx.ConnectTimeout("timeout"))
-
-    async with PdfExtractClient(base_url=BASE_URL, timeout_seconds=5) as client:
-        with pytest.raises(PdfExtractUnavailableError):
-            await client.create_document(make_document(), name="informe")
-
-
-@respx.mock
-async def test_create_document_traduce_la_cola_llena_a_sobrecarga_con_retry_after() -> None:
-    response = problem(503, "Servicio saturado: reintentar mas tarde")
-    response.headers["Retry-After"] = "2"
-    respx.post(DOCUMENTS_URL).mock(return_value=response)
-
-    async with PdfExtractClient(base_url=BASE_URL, timeout_seconds=5) as client:
-        with pytest.raises(PdfExtractOverloadedError, match="saturado") as caught:
-            await client.create_document(make_document(), name="informe")
-
-    assert caught.value.retry_after_seconds == 2
-
-
-@respx.mock
-async def test_create_document_trata_un_503_sin_retry_after_como_no_disponible() -> None:
-    # Así responde Traefik cuando no queda ninguna réplica sana de pdf-extractext.
-    respx.post(DOCUMENTS_URL).mock(return_value=httpx.Response(503, text="no available server"))
-
-    async with PdfExtractClient(base_url=BASE_URL, timeout_seconds=5) as client:
-        with pytest.raises(PdfExtractUnavailableError):
-            await client.create_document(make_document(), name="informe")
-
-
-@respx.mock
-async def test_create_document_informa_cuando_reintentar_con_el_circuito_abierto() -> None:
-    respx.post(DOCUMENTS_URL).mock(side_effect=httpx.ConnectError("refused"))
-    breaker = CircuitBreaker(failure_threshold=1, recovery_timeout_seconds=30)
-
-    async with PdfExtractClient(
-        base_url=BASE_URL, timeout_seconds=5, circuit_breaker=breaker
-    ) as client:
-        with pytest.raises(PdfExtractUnavailableError):
-            await client.create_document(make_document(), name="informe")
-        with pytest.raises(PdfExtractCircuitOpenError) as caught:
-            await client.create_document(make_document(), name="informe")
-
-    assert caught.value.retry_after_seconds == pytest.approx(30, abs=1)
-
-
-# --- POST /extract: extracción sin estado (el flujo nuevo, issue #21) ---
-
-EXTRACT_URL = f"{BASE_URL}/extract"
-EXTRACT_RESPONSE = {"content": "# Informe\n\nTexto extraido", "page_count": 3}
 
 
 @respx.mock
@@ -256,6 +66,20 @@ async def test_extract_traduce_un_4xx_a_rechazo_con_el_detalle(status: int) -> N
 
     async with PdfExtractClient(base_url=BASE_URL, timeout_seconds=5) as client:
         with pytest.raises(PdfExtractRejectedError, match="dañado"):
+            await client.extract(make_document())
+
+
+@respx.mock
+async def test_extract_usa_el_body_crudo_si_el_detalle_no_es_texto() -> None:
+    # Los 422 de FastAPI traen `detail` como lista, no como string.
+    respx.post(EXTRACT_URL).mock(
+        return_value=httpx.Response(
+            422, json={"detail": [{"loc": ["body", "file"], "msg": "campo requerido"}]}
+        )
+    )
+
+    async with PdfExtractClient(base_url=BASE_URL, timeout_seconds=5) as client:
+        with pytest.raises(PdfExtractRejectedError, match="campo requerido"):
             await client.extract(make_document())
 
 
@@ -293,14 +117,17 @@ async def test_extract_traduce_la_cola_llena_a_sobrecarga_con_retry_after() -> N
 @pytest.mark.parametrize(
     ("mock", "expected"),
     [
+        # Así responde Traefik cuando no queda ninguna réplica sana.
         (
             {"return_value": httpx.Response(503, text="no available server")},
             PdfExtractUnavailableError,
         ),
         ({"side_effect": httpx.ConnectError("refused")}, PdfExtractUnavailableError),
+        # Timeout de conexión: el hoja no está escuchando, no está lento.
+        ({"side_effect": httpx.ConnectTimeout("timeout")}, PdfExtractUnavailableError),
         ({"side_effect": httpx.ReadTimeout("timeout")}, PdfExtractTimeoutError),
     ],
-    ids=["503-sin-retry-after", "sin-conexion", "timeout"],
+    ids=["503-sin-retry-after", "sin-conexion", "timeout-de-conexion", "timeout"],
 )
 @respx.mock
 async def test_extract_traduce_las_caidas(
@@ -309,5 +136,31 @@ async def test_extract_traduce_las_caidas(
     respx.post(EXTRACT_URL).mock(**mock)  # type: ignore[arg-type]
 
     async with PdfExtractClient(base_url=BASE_URL, timeout_seconds=5) as client:
-        with pytest.raises(expected):
+        with pytest.raises(expected, match="pdf-extractext"):
             await client.extract(make_document())
+
+
+@respx.mock
+async def test_extract_traduce_el_circuito_abierto_e_informa_cuando_reintentar() -> None:
+    respx.post(EXTRACT_URL).mock(side_effect=httpx.ConnectError("refused"))
+    breaker = CircuitBreaker(failure_threshold=1, recovery_timeout_seconds=30)
+
+    async with PdfExtractClient(
+        base_url=BASE_URL, timeout_seconds=5, circuit_breaker=breaker
+    ) as client:
+        with pytest.raises(PdfExtractUnavailableError):
+            await client.extract(make_document())
+        with pytest.raises(PdfExtractCircuitOpenError, match="temporalmente") as caught:
+            await client.extract(make_document())
+
+    assert caught.value.retry_after_seconds == pytest.approx(30, abs=1)
+
+
+async def test_extract_traduce_el_bulkhead_lleno() -> None:
+    bulkhead = Bulkhead(max_concurrent=1, max_waiting=0, acquire_timeout_seconds=1)
+    async with bulkhead.slot():  # alguien más ya ocupa el único slot
+        async with PdfExtractClient(
+            base_url=BASE_URL, timeout_seconds=5, bulkhead=bulkhead
+        ) as client:
+            with pytest.raises(PdfExtractOverloadedError, match="en curso"):
+                await client.extract(make_document())

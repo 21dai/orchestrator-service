@@ -58,3 +58,15 @@ def test_validate_pdf_rechaza_contenido_que_no_es_pdf() -> None:
             content_type="application/pdf",
             content=b"esto es texto plano disfrazado",
         )
+
+
+def test_validate_pdf_acepta_un_nombre_de_archivo_de_255_caracteres() -> None:
+    validate_pdf(filename="a" * 251 + ".pdf", content_type="application/pdf", content=b"%PDF-1.4")
+
+
+def test_validate_pdf_rechaza_un_nombre_de_archivo_de_mas_de_255_caracteres() -> None:
+    # document-store guarda el nombre original con ese límite.
+    with pytest.raises(InvalidPdfError, match="255"):
+        validate_pdf(
+            filename="a" * 252 + ".pdf", content_type="application/pdf", content=b"%PDF-1.4"
+        )

@@ -24,25 +24,27 @@ orchestrator-service/
 │   ├── main.py                  # create_app() + lifespan (crea/cierra los clients)
 │   ├── config.py                # Settings (pydantic-settings) desde variables de entorno
 │   ├── dependencies.py          # Wiring de inyección de dependencias (providers)
-│   ├── exceptions.py            # Excepciones de dominio (InvalidPdfError, PdfExtract*Error)
+│   ├── exceptions.py            # Excepciones de dominio (InvalidPdfError, PdfExtract*Error, DocumentStore*Error)
 │   ├── errors.py                # Excepciones → respuestas HTTP RFC 9457 Problem Details
 │   ├── routers/                 # Capa de presentación (Controller en MVC)
 │   │   ├── health.py            # GET /health
 │   │   └── documents.py         # POST /api/v1/documents
 │   ├── schemas/                 # Modelos (Model en MVC)
 │   │   ├── documents.py         # PdfDocument (interno), ProcessedDocument (respuesta pública)
-│   │   └── pdf_extract.py       # ExtractedDocument: contrato de pdf-extractext
+│   │   ├── pdf_extract.py       # ExtractionResult: contrato de POST /extract
+│   │   └── document_store.py    # NewDocument, StoredDocument: contrato de document-store
 │   ├── services/                # Capa de aplicación
 │   │   ├── pdf_validator.py     # validate_pdf(): extensión, MIME, firma %PDF-
 │   │   ├── pdf_loader.py        # load_pdf(): UploadFile → PdfDocument
-│   │   └── document_service.py  # DocumentService.process_pdf(): orquestación
+│   │   └── document_service.py  # DocumentService.process_pdf(): extraer y guardar
 │   └── clients/                 # Infraestructura de salida
 │       ├── base_client.py       # BaseClient: _request = Retry → Circuit Breaker → Bulkhead → red
-│       ├── pdf_extract_client.py# PdfExtractClient.create_document()
+│       ├── pdf_extract_client.py# PdfExtractClient.extract()
+│       ├── document_store_client.py # DocumentStoreClient.create_document()
 │       ├── retry.py             # RetryPolicy
 │       ├── circuit_breaker.py   # CircuitBreaker (cerrado/abierto/half-open)
 │       └── bulkhead.py          # Bulkhead (en vuelo + cola acotada)
-├── docs/decisions/              # ADRs (0001 representación del PDF, 0002 resiliencia)
+├── docs/decisions/              # ADRs (0001 representación del PDF, 0002 resiliencia, 0003 extraer y guardar)
 ├── tests/
 │   ├── unit/                    # Tests aislados, sin I/O real (respx para HTTP)
 │   ├── integration/             # Tests de la app (FastAPI TestClient)
@@ -80,10 +82,11 @@ Cliente ─▶ Traefik ─▶ ┌───────────────�
                       │       ▼                                    │
                       │  Clients: Retry → Circuit Breaker →        │
                       │           Bulkhead → httpx                 │
-                      └───────┼────────────────────────────────────┘
-                              ▼
-                        pdf-extractext ─▶ MongoDB
-              (resuelve por nombre de servicio en la red Docker)
+                      └───────┼─────────────────────┼──────────────┘
+                              ▼                     ▼
+                       pdf-extractext         document-store ─▶ MongoDB
+                     (POST /extract)       (POST /api/v1/documents)
+              (resuelven por nombre de servicio en la red Docker)
 ```
 
 ### Diagrama de secuencia (`POST /api/v1/documents`)
@@ -92,39 +95,47 @@ Cliente ─▶ Traefik ─▶ ┌───────────────�
 Cliente → Router: multipart (file, name?)
 Router → pdf_loader.load_pdf: lee bytes, validate_pdf(), arma PdfDocument   [400 si no es PDF]
 Router → DocumentService.process_pdf(document, name)
-Service → PdfExtractClient.create_document(document, name)
-Client  → pdf-extractext: POST /api/v1/documents (multipart)   [Retry / CB / Bulkhead]
-Client  → Service: ExtractedDocument   | excepción PdfExtract*Error
+Service → valida el nombre (máx. 255)                         [400]
+Service → PdfExtractClient.extract(document)
+Client  → pdf-extractext: POST /extract (multipart)            [Retry / CB / Bulkhead]
+Client  → Service: ExtractionResult   | excepción PdfExtract*Error (no se guarda nada)
+Service → arma NewDocument (SHA-256 de los bytes, tamaño, nombre, texto, páginas)
+Service → DocumentStoreClient.create_document(new_document)
+Client  → document-store: POST /api/v1/documents (JSON)       [Retry / CB / Bulkhead propios]
+Client  → Service: StoredDocument     | excepción DocumentStore*Error / DocumentAlreadyExistsError
 Service → Router: ProcessedDocument
-Router  → Cliente: 201                 | errors.py → Problem Details 400/502/503/504
+Router  → Cliente: 201                | errors.py → Problem Details 400/409/502/503/504
 ```
 
 ## 4. Componentes clave
 
 ### `app/config.py` — Settings
 `BaseSettings` (pydantic-settings) lee variables de entorno. `get_settings()` está cacheado con
-`lru_cache`. Contiene URLs base de los microservicios (p. ej. `pdf_extract_base_url`), el timeout HTTP
-y los parámetros de Retry, Circuit Breaker y Bulkhead. `extra="ignore"`: un `.env` compartido con
+`lru_cache`. Contiene URLs base de los microservicios (`pdf_extract_base_url`,
+`document_store_base_url`), un timeout por microservicio y los parámetros de Retry, Circuit Breaker y Bulkhead. `extra="ignore"`: un `.env` compartido con
 variables de otros servicios no rompe el arranque. **Nunca** valores hardcodeados fuera de aquí.
 
 ### `app/dependencies.py` — Inyección de dependencias
 Providers con `typing.Annotated[..., Depends(...)]` para usar en los routers
-(ej. `DocumentServiceDep`). `get_pdf_extract_client()` es un singleton por proceso (`lru_cache`)
-que **se crea en el lifespan al arrancar** y se cierra al apagar: los patrones de resiliencia
-tienen estado y deben ser uno solo por microservicio. Acá se construyen también las políticas
+(ej. `DocumentServiceDep`). `get_pdf_extract_client()` y `get_document_store_client()` son
+singletons por proceso (`lru_cache`) que **se crean en el lifespan al arrancar** y se cierran al
+apagar: los patrones de resiliencia tienen estado y deben ser uno solo por microservicio. Acá se construyen también las políticas
 (`build_retry_policy`, `build_circuit_breaker`, `build_bulkhead`) a partir de `Settings`.
 
 ### `app/clients/base_client.py` — Cliente HTTP base
 Wrapper sobre `httpx.AsyncClient` con `base_url` y `timeout`. Cada microservicio coordinado tiene
 un cliente concreto que extiende `BaseClient` e implementa solo sus endpoints, siempre vía
 `_request`, el **único punto de salida**: `_request` = Retry → `_send` = Circuit Breaker → Bulkhead →
-red. Los errores de httpx se propagan crudos; cada cliente concreto (p. ej. `PdfExtractClient`) los
-traduce a excepciones de dominio junto con las respuestas de error del hoja. Política y valores:
+red. Encima, `_call` traduce lo común a todos los servicios (fallos de red, timeout, circuito
+abierto, bulkhead lleno, 5xx, body inválido) con las excepciones que cada client declara en un
+`UpstreamErrors`; el client concreto (`PdfExtractClient`, `DocumentStoreClient`) solo resuelve lo
+propio de su contrato (el 2xx esperado y los 4xx). Política y valores:
 [ADR-0002](docs/decisions/0002-politica-de-resiliencia.md).
 
 ### `app/services/` — Orquestación
 Coordinan uno o más clients, agregan resultados y aplican reglas de composición. Reciben los
-clients por constructor contra un `Protocol` (`PdfExtractGateway`), así se prueban con un stub.
+clients por constructor contra un `Protocol` (`PdfExtractGateway`, `DocumentStoreGateway`), así
+se prueban con stubs.
 `pdf_validator.py` y `pdf_loader.py` son el borde de entrada del PDF: validan y convierten el
 `UploadFile` a `PdfDocument` fuera del router. **No debería tener concatenación masiva de llamadas
 sensibles** ni incluir lógica con estado (no hay estado).
@@ -132,8 +143,9 @@ sensibles** ni incluir lógica con estado (no hay estado).
 ### `app/schemas/` — Modelos
 Modelos Pydantic de request/response y objetos que cruzan capas. `PdfDocument` (dataclass
 inmutable, ADR-0001) vive acá porque lo usan services **y** clients, y `clients/` no puede importar
-de `services/`. `pdf_extract.py` tipa el contrato del hoja; nunca se expone tal cual: `ProcessedDocument`
-lo traduce a los nombres públicos del orquestador.
+de `services/`. `pdf_extract.py` y `document_store.py` tipan los contratos de los servicios; nunca
+se exponen tal cual: `ProcessedDocument` traduce el documento guardado a los nombres públicos del
+orquestador.
 
 ## 5. Concerns transversales
 

@@ -136,3 +136,23 @@ mal. Se reprodujeron dos fallas y se corrigieron con TDD:
 
 El circuito abierto también devuelve `Retry-After` con lo que falta para la
 llamada de prueba.
+
+## Actualización (2026-10-23): document-store y un timeout por servicio
+
+Con la integración de document-store (ADR-0003, issue #21):
+
+- **Un Circuit Breaker y un Bulkhead por microservicio.** document-store tiene los suyos,
+  separados de los de pdf-extractext: si uno se cae, no se corta el tráfico hacia el otro.
+  Usan los mismos valores de configuración (`CIRCUIT_BREAKER_*`, `BULKHEAD_*`).
+- **Un timeout por microservicio.** El de pdf-extractext pasó de 10 s a **30 s**
+  (`PDF_EXTRACT_TIMEOUT_SECONDS`): pdf-extractext responde `503` con `Retry-After` antes de
+  25 s si no llega a extraer a tiempo (`EXTRACT_MAX_WAIT_SECONDS`). Con 10 s, el orquestador
+  cortaba con `504` una extracción que pdf-extractext iba a terminar o a rechazar
+  ordenadamente, y el trabajo se perdía. El de document-store es **5 s**
+  (`DOCUMENT_STORE_TIMEOUT_SECONDS`): solo guarda un JSON. `HTTP_TIMEOUT_SECONDS`, el nombre
+  anterior, sigue configurando el de pdf-extractext.
+- **Retry igual para los dos.** Los `POST` no se reintentan ante timeouts ni 5xx: un alta
+  en document-store que agotó el timeout puede haberse guardado igual, y reintentarla
+  terminaría en `409`.
+- **document-store sin MongoDB responde `503` sin `Retry-After`**: el breaker lo cuenta
+  como fallo (es una caída, no una carga pasajera) y el orquestador responde `503`.

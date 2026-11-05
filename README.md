@@ -209,7 +209,7 @@ uv run ruff check . && uv run ruff format --check .   # lint y formato
 |---|---|---|---|
 | Unitarios | `tests/unit/` | Validador, loader, service (con stubs de los dos clients), clients (HTTP mockeado con **respx**), Retry, Circuit Breaker, Bulkhead, config, wiring | sin I/O real |
 | Integración | `tests/integration/` | La app completa en memoria con `TestClient`: endpoints, handlers de error, lifespan; pdf-extractext y document-store simulados con respx | sin servicios externos |
-| Sistema | `tests/system/` | Punta a punta contra el stack real (Traefik + orquestador + pdf-extractext + MongoDB) | opt-in, ver abajo |
+| Sistema | `tests/system/` | Punta a punta contra el stack real (Traefik + orquestador + pdf-extractext + document-store + MongoDB) | opt-in, ver abajo |
 
 ### Tests de sistema (opt-in)
 
@@ -224,8 +224,47 @@ RUN_SYSTEM_TESTS=1 uv run pytest tests/system -o addopts=""
 $env:RUN_SYSTEM_TESTS=1; uv run pytest tests/system -o addopts=""
 ```
 
-`ORCHESTRATOR_BASE_URL` apunta a otro despliegue (default: `https://orchestrator.proyecto.localhost`).
+Los tests de tolerancia a fallas (`test_fault_tolerance_system.py`) **detienen
+document-store** con `docker compose stop` y lo vuelven a levantar al terminar, aunque el test
+falle. Por eso exigen una segunda variable:
+
+```bash
+# bash
+RUN_SYSTEM_TESTS=1 RUN_FAULT_TESTS=1 uv run pytest tests/system -o addopts=""
+# PowerShell
+$env:RUN_SYSTEM_TESTS=1; $env:RUN_FAULT_TESTS=1; uv run pytest tests/system -o addopts=""
+```
+
+| Variable | Default | Para qué |
+|---|---|---|
+| `RUN_SYSTEM_TESTS` | — | `1` habilita los tests de sistema; sin ella se saltean (la CI no tiene stack) |
+| `RUN_FAULT_TESTS` | — | `1` habilita además los que detienen contenedores |
+| `ORCHESTRATOR_BASE_URL` | `https://orchestrator.proyecto.localhost` | Despliegue contra el que se prueba |
+| `INFRASTRUCTURE_DIR` | `../infrastructure` | Carpeta del `docker-compose.yml` del stack, donde se corre `docker compose` |
+| `CIRCUIT_BREAKER_RECOVERY_SECONDS` | `30` | El del orquestador desplegado: cuánto reintentar después de restaurar un servicio |
+
+```bash
+# bash: el stack en otra carpeta
+INFRASTRUCTURE_DIR=/ruta/a/infrastructure RUN_SYSTEM_TESTS=1 RUN_FAULT_TESTS=1 uv run pytest tests/system -o addopts=""
+# PowerShell
+$env:INFRASTRUCTURE_DIR="C:\ruta\a\infrastructure"; $env:RUN_SYSTEM_TESTS=1; $env:RUN_FAULT_TESTS=1; uv run pytest tests/system -o addopts=""
+```
+
 `-o addopts=""` evita que el umbral de cobertura de la suite regular aplique a estos tests.
+
+### Escenarios del flujo y dónde se prueban (issue #22)
+
+| Escenario | Unitario | Integración (respx) | Sistema (stack real) |
+|---|---|---|---|
+| Flujo exitoso: extrae, guarda y responde `201` | `test_process_pdf_extrae_el_texto_y_guarda_el_documento_en_document_store` | `test_post_documents_extrae_guarda_y_devuelve_el_documento` | `test_flujo_completo_extrae_guarda_y_devuelve_el_documento` |
+| Checksum SHA-256 calculado por el orquestador | `test_pdf_document_calcula_el_checksum_sha256_de_su_contenido`, `test_process_pdf_envia_el_sha256_de_los_bytes_del_pdf` | mismo test del flujo: body enviado a document-store | mismo test del flujo: `checksum == sha256(bytes)` |
+| Request enviada a document-store | `test_create_document_envia_el_json_del_contrato_y_mapea_el_201` | `test_post_documents_extrae_guarda_y_devuelve_el_documento` | — |
+| Documento duplicado → `409` | `test_create_document_traduce_el_409_a_documento_duplicado` | `test_post_documents_responde_409_si_el_pdf_ya_estaba_guardado` | `test_el_mismo_pdf_dos_veces_responde_409_con_problem_details` |
+| pdf-extractext rechaza el PDF → `400`, sin guardar | `test_si_falla_la_extraccion_no_se_guarda_nada`, `test_extract_traduce_un_4xx_a_rechazo_con_el_detalle` | `test_post_documents_propaga_el_rechazo_de_pdf_extractext_sin_guardar` | `test_un_pdf_danado_responde_400_y_no_se_guarda` |
+| pdf-extractext falla (5xx, caído, timeout), sin guardar | `test_extract_traduce_una_respuesta_inesperada`, `test_extract_traduce_las_caidas` | `test_post_documents_informa_las_fallas_de_pdf_extractext_sin_guardar`, `test_post_documents_informa_fallos_de_red_hacia_pdf_extractext` | — |
+| document-store no disponible → `503` | `test_create_document_traduce_los_fallos_de_red`, `test_create_document_trata_un_503_sin_retry_after_como_no_disponible` | `test_post_documents_informa_las_fallas_de_document_store[caido]`, `[sin-base]` | `test_document_store_caido_responde_503_y_al_volver_se_guarda_el_mismo_pdf` |
+| document-store error interno → `502` | `test_create_document_traduce_5xx_a_respuesta_inesperada` | `test_post_documents_informa_las_fallas_de_document_store[5xx]` | — (no se puede provocar sin tocar código) |
+| El orquestador no tiene persistencia propia | `test_sin_persistencia.py` | — | — |
 
 ## Docker y Traefik
 
@@ -242,7 +281,7 @@ docker run --rm -p 8001:8000 -e PDF_EXTRACT_BASE_URL=http://host.docker.internal
 ### Stack completo con Traefik
 
 El despliegue completo (Traefik como reverse proxy y balanceador, orquestador con réplicas,
-pdf-extractext y MongoDB, todo en una red Docker) vive en la carpeta hermana
+pdf-extractext, document-store y MongoDB, todo en una red Docker) vive en la carpeta hermana
 **`../infrastructure`**, con su propio README. Resumen:
 
 ```bash

@@ -12,6 +12,11 @@ FROM python:3.14-alpine
 
 WORKDIR /app
 
+# Actualizar paquetes del sistema para mitigar vulnerabilidades (zlib, busybox)
+# Nota: sqlite-libs 3.53.4-r0 permanece; Alpine 3.24 no tiene versión corregida en repositorio estable.
+# Usar edge (3.54.1) mezclaría repositorios inestables; se documenta como limitación conocida.
+RUN apk upgrade --no-cache
+
 COPY --from=builder /app/.venv /app/.venv
 COPY --from=builder /app/app /app/app
 

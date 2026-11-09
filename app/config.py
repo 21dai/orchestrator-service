@@ -14,6 +14,19 @@ class Settings(BaseSettings):
     app_name: str = "orchestrator-service"
     environment: str = "local"
 
+    # Servidor (main.py se los pasa a uvicorn). El puerto es configuración
+    # (12-Factor VII): se cambia con PORT sin reconstruir la imagen.
+    host: str = "0.0.0.0"
+    port: int = 8000
+    # Activa el reload de uvicorn: solo para desarrollo.
+    debug: bool = False
+    # IPs o redes (CIDR) de las que se aceptan los headers X-Forwarded-*
+    # (Traefik). En el compose: la subred de la red compartida.
+    forwarded_allow_ips: str = "127.0.0.1"
+    # Segundos que uvicorn espera las requests en curso al recibir SIGTERM.
+    # Tiene que ser menor que el stop_grace_period del compose.
+    graceful_shutdown_seconds: int = 60
+
     # URL base del microservicio de extracción de texto (pdf-extractext).
     # Local: la API corre en :8000. En Docker resuelve por nombre de servicio
     # dentro de la red compartida, p. ej. PDF_EXTRACT_BASE_URL=http://pdf-extractext:8000

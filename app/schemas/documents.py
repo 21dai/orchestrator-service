@@ -1,8 +1,9 @@
 import hashlib
 from dataclasses import dataclass
 from datetime import datetime
+from typing import Annotated
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 
 from app.schemas.document_store import StoredDocument
 
@@ -28,6 +29,26 @@ class PdfDocument:
     def checksum(self) -> str:
         """SHA-256 hexadecimal de los bytes: identifica al PDF en document-store."""
         return hashlib.sha256(self.content).hexdigest()
+
+
+#: Nombre de documento: de 1 a 255 caracteres sin contar los espacios de los
+#: extremos, igual que en document-store.
+DocumentName = Annotated[
+    str, StringConstraints(strip_whitespace=True, min_length=1, max_length=255)
+]
+
+
+class DocumentUpdate(BaseModel):
+    """Body del `PUT /api/v1/documents/{id}`: lo único editable es el nombre.
+
+    Mismas reglas que el `DocumentUpdate` de document-store (estricto y sin
+    campos extra), validadas acá: un nombre inválido es un error del cliente
+    (422), no una respuesta rara de document-store (502).
+    """
+
+    model_config = ConfigDict(strict=True, extra="forbid")
+
+    name: DocumentName = Field(description="Nuevo nombre del documento (1 a 255 caracteres).")
 
 
 class ProcessedDocument(BaseModel):

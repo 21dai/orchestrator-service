@@ -1,8 +1,9 @@
 import hashlib
 from dataclasses import dataclass
 from datetime import datetime
+from typing import Annotated
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 
 from app.schemas.document_store import StoredDocument
 
@@ -30,6 +31,26 @@ class PdfDocument:
         return hashlib.sha256(self.content).hexdigest()
 
 
+#: Nombre de documento: de 1 a 255 caracteres sin contar los espacios de los
+#: extremos, igual que en document-store.
+DocumentName = Annotated[
+    str, StringConstraints(strip_whitespace=True, min_length=1, max_length=255)
+]
+
+
+class DocumentUpdate(BaseModel):
+    """Body del `PUT /api/v1/documents/{id}`: lo único editable es el nombre.
+
+    Mismas reglas que el `DocumentUpdate` de document-store (estricto y sin
+    campos extra), validadas acá: un nombre inválido es un error del cliente
+    (422), no una respuesta rara de document-store (502).
+    """
+
+    model_config = ConfigDict(strict=True, extra="forbid")
+
+    name: DocumentName = Field(description="Nuevo nombre del documento (1 a 255 caracteres).")
+
+
 class ProcessedDocument(BaseModel):
     """Respuesta pública del orquestador: el PDF procesado y guardado.
 
@@ -46,6 +67,9 @@ class ProcessedDocument(BaseModel):
     is_processed: bool = Field(description="Si el texto ya fue extraído.")
     extracted_text: str = Field(description="Texto extraído del PDF, en Markdown.")
     processed_at: datetime = Field(description="Momento en que se guardó el documento.")
+    updated_at: datetime = Field(
+        description="Última modificación del documento (igual a processed_at si nunca se editó)."
+    )
 
     @classmethod
     def from_stored(cls, stored: StoredDocument) -> ProcessedDocument:
@@ -59,4 +83,5 @@ class ProcessedDocument(BaseModel):
             is_processed=stored.is_processed,
             extracted_text=stored.extracted_text,
             processed_at=stored.created_at,
+            updated_at=stored.updated_at,
         )

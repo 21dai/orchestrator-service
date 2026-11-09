@@ -2,8 +2,10 @@
 
 Microservicio **orquestador** construido con **FastAPI**. Recibe un PDF, lo valida, le pide
 el texto a `pdf-extractext` y guarda el resultado en `document-store`, devolviendo el
-documento guardado. No mantiene estado ni se conecta a bases de datos: extraer es trabajo
-de pdf-extractext y persistir, de document-store.
+documento guardado. También expone el CRUD de los documentos guardados (listar, ver,
+renombrar y borrar), delegando en document-store, que no se publica por Traefik: el orquestador
+es el único punto de entrada. No mantiene estado ni se conecta a bases de datos: extraer es
+trabajo de pdf-extractext y persistir, de document-store.
 
 Aplica los patrones de resiliencia **Retry**, **Circuit Breaker** y **Bulkhead** sobre las
 llamadas salientes, para que un microservicio lento o caído no arrastre al orquestador.
@@ -79,6 +81,14 @@ Documentación interactiva (Swagger): `/docs` · OpenAPI: `/openapi.json`.
 |---|---|---|---|
 | `GET` | `/health` | Salud del servicio (la usan Docker y Traefik) | `200 {"status":"ok"}` |
 | `POST` | `/api/v1/documents` | Recibe un PDF, extrae su texto con pdf-extractext, lo guarda en document-store y devuelve el documento guardado | `201`, `400`, `409`, `413`, `422`, `502`, `503`, `504` |
+| `GET` | `/api/v1/documents?skip=0&limit=10` | Lista los documentos guardados, en orden de id ascendente | `200`, `422`, `502`, `503`, `504` |
+| `GET` | `/api/v1/documents/{document_id}` | Devuelve un documento con su texto extraído | `200`, `404`, `422`, `502`, `503`, `504` |
+| `PUT` | `/api/v1/documents/{document_id}` | Renombra un documento (`{"name": "..."}`, lo único editable) | `200`, `404`, `422`, `502`, `503`, `504` |
+| `DELETE` | `/api/v1/documents/{document_id}` | Borra un documento | `204`, `404`, `422`, `502`, `503`, `504` |
+
+Todas las respuestas usan el mismo modelo, `ProcessedDocument`; los errores, Problem Details
+(ver [Errores](#errores)). Los ejemplos van contra el stack con Traefik (`-k`: certificado local
+de mkcert); en local, cambiar la URL por `http://localhost:8000`.
 
 ### `POST /api/v1/documents`
 
@@ -90,7 +100,7 @@ Body `multipart/form-data`:
 | `name` | texto | no | Nombre del documento, hasta 255 caracteres. Si se omite, se usa el nombre del archivo sin extensión |
 
 ```bash
-curl.exe -F "name=informe" -F "file=@informe.pdf;type=application/pdf" http://localhost:8000/api/v1/documents
+curl.exe -k -F "name=informe" -F "file=@informe.pdf;type=application/pdf" https://orchestrator.proyecto.localhost/api/v1/documents
 ```
 
 Respuesta `201 Created`:
@@ -105,12 +115,78 @@ Respuesta `201 Created`:
   "page_count": 1,
   "is_processed": true,
   "extracted_text": "Hola desde el orquestador",
-  "processed_at": "2026-10-23T13:50:47.603Z"
+  "processed_at": "2026-10-23T13:50:47.603Z",
+  "updated_at": "2026-10-23T13:50:47.603Z"
 }
 ```
 
 `document_id` es el id que asigna document-store; `checksum` es el SHA-256 de los bytes del
-PDF, calculado por el orquestador.
+PDF, calculado por el orquestador. `processed_at` es cuándo se guardó y `updated_at`, la última
+modificación (igual a `processed_at` hasta que se renombra).
+
+### `GET /api/v1/documents`
+
+| Query | Default | Reglas |
+|---|---|---|
+| `skip` | `0` | Documentos a saltear, `>= 0` |
+| `limit` | `10` | Máximo a devolver, de `1` a `100` |
+
+```bash
+curl.exe -k "https://orchestrator.proyecto.localhost/api/v1/documents?skip=0&limit=10"
+```
+
+`200` con una lista de `ProcessedDocument` (vacía si no hay documentos en esa página). Cada
+elemento incluye `extracted_text` completo, igual que en document-store. Un `skip` o `limit`
+fuera de rango responde `422` sin llamar a document-store.
+
+### `GET /api/v1/documents/{document_id}`
+
+```bash
+curl.exe -k https://orchestrator.proyecto.localhost/api/v1/documents/1
+```
+
+`200` con el documento, o `404` si no existe. Un id que no es un entero positivo (`0`, `-5`,
+`abc`) responde `422`.
+
+### `PUT /api/v1/documents/{document_id}`
+
+Body JSON: solo `name`, de 1 a 255 caracteres sin contar los espacios de los extremos (se
+quitan). Mismas reglas que document-store, pero validadas en el orquestador: un nombre vacío,
+demasiado largo, que no es texto, o un campo extra responde `422` sin llamar a document-store.
+
+```powershell
+'{"name": "Informe final"}' | Out-File -Encoding ascii renombrar.json
+curl.exe -k -X PUT -H "Content-Type: application/json" --data-binary "@renombrar.json" https://orchestrator.proyecto.localhost/api/v1/documents/1
+```
+
+`200` con el documento completo: cambian `name` y `updated_at`; el resto queda igual. `404` si no
+existe.
+
+### `DELETE /api/v1/documents/{document_id}`
+
+```bash
+curl.exe -k -X DELETE https://orchestrator.proyecto.localhost/api/v1/documents/1
+```
+
+`204` sin cuerpo, o `404` si no existe (por ejemplo, al borrarlo dos veces).
+
+### Colección de Postman
+
+[`docs/postman/orchestrator.postman_collection.json`](docs/postman/orchestrator.postman_collection.json)
+tiene las cinco requests, en orden: subir, listar, ver, renombrar y borrar.
+
+1. En Postman: **Import** → elegir el archivo.
+2. En **1. Subir documento** → **Body** → `file`: elegir un PDF.
+3. Enviar las requests en orden. El script de test de *Subir* guarda el `document_id` de la
+   respuesta en la variable de colección `documentId`, que usan las otras tres.
+
+| Variable | Valor | Para qué |
+|---|---|---|
+| `baseUrl` | `https://orchestrator.proyecto.localhost` | El orquestador detrás de Traefik |
+| `documentId` | (se completa solo) | Id del último documento subido |
+
+Cada request tiene la verificación SSL desactivada (`strictSSL: false`), porque Traefik usa un
+certificado local de mkcert. Para probar sin Docker, cambiar `baseUrl` a `http://localhost:8000`.
 
 ## Errores
 
@@ -133,9 +209,10 @@ document-store:
 | `400` | El archivo no es un PDF (extensión, MIME, vacío o contenido inválido) o su nombre supera los 255 caracteres | `InvalidPdfError` |
 | `400` | El `name` supera los 255 caracteres | `InvalidDocumentNameError` |
 | `400` | pdf-extractext no pudo leer el PDF (p. ej. un PDF dañado); se reenvía su `detail` | `PdfExtractRejectedError` |
+| `404` | No existe un documento con ese id (ver, renombrar o borrar) | `DocumentNotFoundError` |
 | `409` | El PDF ya estaba guardado: document-store tiene un documento con el mismo checksum | `DocumentAlreadyExistsError` |
 | `413` | El PDF supera `MAX_PDF_SIZE_BYTES` (10 MB). Se corta sin terminar de leerlo | `PdfTooLargeError` |
-| `422` | Falta el campo `file` u otro error de validación de la request | — |
+| `422` | Falta el campo `file`, el id no es un entero positivo, `skip`/`limit` fuera de rango, el `name` del `PUT` es inválido o trae campos extra, u otro error de validación de la request. No se llama a ningún servicio | — |
 | `502` | pdf-extractext o document-store respondió 5xx o un cuerpo que no se puede interpretar | `PdfExtractUnexpectedResponseError`, `DocumentStoreUnexpectedResponseError` |
 | `502` | document-store rechazó los datos con otro 4xx: el orquestador ya los validó, así que es un contrato roto o una URL mal configurada | `DocumentStoreRejectedError` |
 | `503` | No se pudo conectar con el servicio (tras agotar los reintentos), no quedan réplicas sanas (503 de Traefik) o document-store no tiene MongoDB (503 sin `Retry-After`) | `PdfExtractUnavailableError`, `DocumentStoreUnavailableError` |
@@ -257,6 +334,10 @@ $env:INFRASTRUCTURE_DIR="C:\ruta\a\infrastructure"; $env:RUN_SYSTEM_TESTS=1; $en
 
 `-o addopts=""` evita que el umbral de cobertura de la suite regular aplique a estos tests.
 
+En Windows, Python no resuelve `*.localhost` (`getaddrinfo failed`), aunque `curl.exe` y el
+navegador sí. Para correr los tests de sistema desde Windows, agregar
+`127.0.0.1 orchestrator.proyecto.localhost` al archivo `hosts` (como administrador).
+
 ### Escenarios del flujo y dónde se prueban (issue #22)
 
 | Escenario | Unitario | Integración (respx) | Sistema (stack real) |
@@ -270,6 +351,17 @@ $env:INFRASTRUCTURE_DIR="C:\ruta\a\infrastructure"; $env:RUN_SYSTEM_TESTS=1; $en
 | document-store no disponible → `503` | `test_create_document_traduce_los_fallos_de_red`, `test_create_document_trata_un_503_sin_retry_after_como_no_disponible` | `test_post_documents_informa_las_fallas_de_document_store[caido]`, `[sin-base]` | `test_document_store_caido_responde_503_y_al_volver_se_guarda_el_mismo_pdf` |
 | document-store error interno → `502` | `test_create_document_traduce_5xx_a_respuesta_inesperada` | `test_post_documents_informa_las_fallas_de_document_store[5xx]` | — (no se puede provocar sin tocar código) |
 | El orquestador no tiene persistencia propia | `test_sin_persistencia.py` | — | — |
+
+### CRUD de documentos y dónde se prueba (issue #27)
+
+| Escenario | Unitario | Integración (respx) | Sistema (stack real) |
+|---|---|---|---|
+| Listar, ver, renombrar y borrar | `test_document_store_client.py` (`test_list_documents_*`, `test_get_document_*`, `test_update_document_*`, `test_delete_document_*`), `test_document_service_crud.py` | `test_documents_crud.py` (camino feliz) | `test_subir_listar_ver_renombrar_borrar_y_despues_404` |
+| Id inexistente → `404` | `test_*_traduce_el_404_a_documento_inexistente`, `test_un_id_inexistente_propaga_documento_no_encontrado` | `test_un_id_inexistente_responde_404_con_problem_details` | mismo test del flujo: `GET` y `DELETE` después de borrar |
+| Pedido inválido → `422` sin llamar a document-store | `test_document_update.py` | `test_un_pedido_invalido_responde_422_sin_llamar_a_document_store` | `test_renombrar_con_un_nombre_invalido_responde_422_y_no_cambia_nada` |
+| document-store caído o sin MongoDB → `503`, sin responder → `504` | `test_*_traduce_los_fallos_de_red`, `test_*_traduce_5xx_a_respuesta_inesperada` | `test_document_store_caido_responde_503`, `test_document_store_sin_responder_a_tiempo_responde_504` | — |
+| GET, PUT y DELETE reintentan un 5xx; el alta no | `test_las_operaciones_idempotentes_reintentan_un_5xx`, `test_el_alta_no_reintenta_un_5xx` | — | — |
+| Aparecen en `/docs` con sus errores | — | `test_los_endpoints_del_crud_aparecen_en_openapi_con_sus_errores` | — |
 
 ## Docker y Traefik
 
@@ -357,7 +449,7 @@ app/
 ├── errors.py               # excepciones de dominio → Problem Details
 ├── exceptions.py           # excepciones de dominio
 ├── routers/   documents.py, health.py
-├── schemas/   documents.py (PdfDocument, ProcessedDocument), pdf_extract.py y document_store.py (contratos de los servicios)
+├── schemas/   documents.py (PdfDocument, ProcessedDocument, DocumentUpdate), pdf_extract.py y document_store.py (contratos de los servicios)
 ├── services/  document_service.py, pdf_loader.py, pdf_validator.py
 └── clients/   base_client.py, pdf_extract_client.py, document_store_client.py, retry.py, circuit_breaker.py, bulkhead.py
 ```
@@ -370,3 +462,5 @@ app/
   - document-store: `POST /api/v1/documents` (JSON con `name`, `original_filename`,
     `checksum`, `file_size`, `page_count`, `extracted_text`, `is_processed`) →
     `201` con el documento y su `id`; `409` si el checksum ya existe.
+    `GET /api/v1/documents?skip=&limit=` → `200` con la lista; `GET`, `PUT` (`{"name"}`) y
+    `DELETE /api/v1/documents/{id}` → `200`/`204`, o `404` si el id no existe.

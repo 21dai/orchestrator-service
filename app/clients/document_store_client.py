@@ -1,8 +1,12 @@
+from typing import NoReturn
+
 import httpx
+from pydantic import TypeAdapter, ValidationError
 
 from app.clients.base_client import BaseClient, UpstreamErrors, error_detail
 from app.exceptions import (
     DocumentAlreadyExistsError,
+    DocumentNotFoundError,
     DocumentStoreCircuitOpenError,
     DocumentStoreOverloadedError,
     DocumentStoreRejectedError,
@@ -13,6 +17,14 @@ from app.exceptions import (
 from app.schemas.document_store import NewDocument, StoredDocument
 
 DOCUMENTS_PATH = "/api/v1/documents"
+
+#: `_parse` valida contra un modelo; la lista se valida con un TypeAdapter.
+STORED_DOCUMENT_LIST = TypeAdapter(list[StoredDocument])
+
+
+def document_path(document_id: int) -> str:
+    return f"{DOCUMENTS_PATH}/{document_id}"
+
 
 ERRORS = UpstreamErrors(
     service="document-store",
@@ -42,5 +54,62 @@ class DocumentStoreClient(BaseClient):
         if response.is_client_error:
             raise DocumentStoreRejectedError(
                 f"document-store rechazó el documento: {error_detail(response)}"
+            )
+        self._raise_unexpected(ERRORS, response)
+
+    async def list_documents(self, skip: int, limit: int) -> list[StoredDocument]:
+        """`GET /api/v1/documents?skip=&limit=`: una página, en orden de id ascendente."""
+        response = await self._call(
+            ERRORS, "GET", DOCUMENTS_PATH, params={"skip": skip, "limit": limit}
+        )
+
+        if response.status_code == httpx.codes.OK:
+            try:
+                return STORED_DOCUMENT_LIST.validate_json(response.content)
+            except ValidationError as exc:
+                raise DocumentStoreUnexpectedResponseError(
+                    "La respuesta de document-store no tiene el formato esperado."
+                ) from exc
+        if response.is_client_error:
+            raise DocumentStoreRejectedError(
+                f"document-store rechazó la solicitud: {error_detail(response)}"
+            )
+        self._raise_unexpected(ERRORS, response)
+
+    async def get_document(self, document_id: int) -> StoredDocument:
+        """`GET /api/v1/documents/{id}`: el documento guardado con ese id."""
+        response = await self._call(ERRORS, "GET", document_path(document_id))
+
+        if response.status_code == httpx.codes.OK:
+            return self._parse(ERRORS, response, StoredDocument)
+        self._raise_for_document(response, document_id)
+
+    async def update_document(self, document_id: int, name: str) -> StoredDocument:
+        """`PUT /api/v1/documents/{id}`: renombra el documento (lo único editable)."""
+        response = await self._call(ERRORS, "PUT", document_path(document_id), json={"name": name})
+
+        if response.status_code == httpx.codes.OK:
+            return self._parse(ERRORS, response, StoredDocument)
+        self._raise_for_document(response, document_id)
+
+    async def delete_document(self, document_id: int) -> None:
+        """`DELETE /api/v1/documents/{id}`: borra el documento (204 sin cuerpo)."""
+        response = await self._call(ERRORS, "DELETE", document_path(document_id))
+
+        if response.status_code == httpx.codes.NO_CONTENT:
+            return
+        self._raise_for_document(response, document_id)
+
+    def _raise_for_document(self, response: httpx.Response, document_id: int) -> NoReturn:
+        """Errores de las operaciones sobre un documento por id.
+
+        Un 404 es que el id no existe. Otro 4xx es un pedido que el orquestador
+        ya debería haber validado (contrato roto, HTTP 502), como en el alta.
+        """
+        if response.status_code == httpx.codes.NOT_FOUND:
+            raise DocumentNotFoundError(document_id)
+        if response.is_client_error:
+            raise DocumentStoreRejectedError(
+                f"document-store rechazó la solicitud: {error_detail(response)}"
             )
         self._raise_unexpected(ERRORS, response)

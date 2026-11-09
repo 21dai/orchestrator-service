@@ -20,6 +20,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.exceptions import (
     DocumentAlreadyExistsError,
+    DocumentNotFoundError,
     DocumentStoreCircuitOpenError,
     DocumentStoreOverloadedError,
     DocumentStoreRejectedError,
@@ -55,6 +56,7 @@ STATUS_BY_EXCEPTION: dict[type[OrchestratorError], int] = {
     PdfExtractTimeoutError: status.HTTP_504_GATEWAY_TIMEOUT,
     # El PDF ya estaba guardado: el cliente recibe un conflicto claro.
     DocumentAlreadyExistsError: status.HTTP_409_CONFLICT,
+    DocumentNotFoundError: status.HTTP_404_NOT_FOUND,
     DocumentStoreRejectedError: status.HTTP_502_BAD_GATEWAY,
     DocumentStoreUnexpectedResponseError: status.HTTP_502_BAD_GATEWAY,
     DocumentStoreUnavailableError: status.HTTP_503_SERVICE_UNAVAILABLE,

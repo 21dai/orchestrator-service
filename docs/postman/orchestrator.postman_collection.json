@@ -1,0 +1,216 @@
+{
+  "info": {
+    "name": "orchestrator-service",
+    "description": "CRUD de documentos a través del orquestador (Traefik → orchestrator → pdf-extractext / document-store).\n\nOrden sugerido: 1. Subir → 2. Listar → 3. Ver → 4. Renombrar → 5. Borrar. \"Subir\" guarda el id en la variable de colección `documentId`, que usan las demás.\n\nTraefik usa un certificado local de mkcert: cada request tiene la verificación SSL desactivada (`strictSSL: false`).",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "https://orchestrator.proyecto.localhost",
+      "type": "string",
+      "description": "URL del orquestador detrás de Traefik."
+    },
+    {
+      "key": "documentId",
+      "value": "",
+      "type": "string",
+      "description": "Se completa sola con el document_id de la respuesta de \"1. Subir documento\"."
+    }
+  ],
+  "item": [
+    {
+      "name": "1. Subir documento",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"201 Created\", () => pm.response.to.have.status(201));",
+              "",
+              "if (pm.response.code === 201) {",
+              "    const documentId = pm.response.json().document_id;",
+              "    pm.collectionVariables.set(\"documentId\", documentId);",
+              "    console.log(`documentId = ${documentId}`);",
+              "}"
+            ]
+          }
+        }
+      ],
+      "protocolProfileBehavior": {
+        "strictSSL": false
+      },
+      "request": {
+        "method": "POST",
+        "header": [],
+        "body": {
+          "mode": "formdata",
+          "formdata": [
+            {
+              "key": "file",
+              "type": "file",
+              "src": [],
+              "description": "PDF a procesar (hasta 10 MB). Elegir el archivo en Postman."
+            },
+            {
+              "key": "name",
+              "value": "Documento de prueba",
+              "type": "text",
+              "description": "Opcional: si no se manda, se usa el nombre del archivo."
+            }
+          ]
+        },
+        "url": {
+          "raw": "{{baseUrl}}/api/v1/documents",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "v1", "documents"]
+        },
+        "description": "Extrae el texto con pdf-extractext y lo guarda en document-store. 201 con el documento; 400 si no es un PDF válido, 409 si ya estaba guardado, 413 si supera 10 MB."
+      }
+    },
+    {
+      "name": "2. Listar documentos",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"200 OK con una lista\", () => {",
+              "    pm.response.to.have.status(200);",
+              "    pm.expect(pm.response.json()).to.be.an(\"array\");",
+              "});"
+            ]
+          }
+        }
+      ],
+      "protocolProfileBehavior": {
+        "strictSSL": false
+      },
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/api/v1/documents?skip=0&limit=10",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "v1", "documents"],
+          "query": [
+            {
+              "key": "skip",
+              "value": "0",
+              "description": "Documentos a saltear (>= 0)."
+            },
+            {
+              "key": "limit",
+              "value": "10",
+              "description": "Máximo de documentos (1 a 100)."
+            }
+          ]
+        },
+        "description": "Página de documentos en orden de id ascendente. 422 si skip o limit están fuera de rango."
+      }
+    },
+    {
+      "name": "3. Ver documento",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"200 OK con el documento pedido\", () => {",
+              "    pm.response.to.have.status(200);",
+              "    pm.expect(String(pm.response.json().document_id)).to.eql(pm.collectionVariables.get(\"documentId\"));",
+              "});"
+            ]
+          }
+        }
+      ],
+      "protocolProfileBehavior": {
+        "strictSSL": false
+      },
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/api/v1/documents/{{documentId}}",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "v1", "documents", "{{documentId}}"]
+        },
+        "description": "El documento con su texto extraído. 404 si no existe."
+      }
+    },
+    {
+      "name": "4. Renombrar documento",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"200 OK con el nombre nuevo\", () => {",
+              "    pm.response.to.have.status(200);",
+              "    pm.expect(pm.response.json().name).to.eql(\"Documento renombrado\");",
+              "});"
+            ]
+          }
+        }
+      ],
+      "protocolProfileBehavior": {
+        "strictSSL": false
+      },
+      "request": {
+        "method": "PUT",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n    \"name\": \"Documento renombrado\"\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "url": {
+          "raw": "{{baseUrl}}/api/v1/documents/{{documentId}}",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "v1", "documents", "{{documentId}}"]
+        },
+        "description": "Solo se puede cambiar el nombre (1 a 255 caracteres). Devuelve el documento con updated_at actualizado. 404 si no existe; 422 si el nombre es inválido o hay campos extra."
+      }
+    },
+    {
+      "name": "5. Borrar documento",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"204 No Content\", () => pm.response.to.have.status(204));"
+            ]
+          }
+        }
+      ],
+      "protocolProfileBehavior": {
+        "strictSSL": false
+      },
+      "request": {
+        "method": "DELETE",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/api/v1/documents/{{documentId}}",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "v1", "documents", "{{documentId}}"]
+        },
+        "description": "Borra el documento. 204 sin cuerpo; 404 si no existe (por ejemplo, al mandarlo dos veces)."
+      }
+    }
+  ]
+}

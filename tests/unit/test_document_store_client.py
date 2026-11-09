@@ -8,8 +8,10 @@ import respx
 from app.clients.bulkhead import Bulkhead
 from app.clients.circuit_breaker import CircuitBreaker, CircuitState
 from app.clients.document_store_client import DocumentStoreClient
+from app.clients.retry import RetryPolicy
 from app.exceptions import (
     DocumentAlreadyExistsError,
+    DocumentNotFoundError,
     DocumentStoreCircuitOpenError,
     DocumentStoreOverloadedError,
     DocumentStoreRejectedError,
@@ -219,3 +221,265 @@ async def test_un_409_no_cuenta_como_fallo_para_el_circuit_breaker() -> None:
                 await client.create_document(NEW_DOCUMENT)
 
     assert breaker.state is CircuitState.CLOSED
+
+
+# --- CRUD: GET, PUT y DELETE de un documento, y la lista -----------------------
+
+DOCUMENT_URL = f"{DOCUMENTS_URL}/7"
+
+STORED_DOCUMENT = StoredDocument.model_validate(STORED_RESPONSE)
+
+#: Fallos de red de cualquier operación y la excepción de dominio que corresponde.
+NETWORK_FAILURES = [
+    (httpx.ConnectError("refused"), DocumentStoreUnavailableError),
+    (httpx.ReadTimeout("timeout"), DocumentStoreTimeoutError),
+]
+
+
+@respx.mock
+async def test_get_document_pide_el_documento_por_id_y_mapea_el_200() -> None:
+    route = respx.get(DOCUMENT_URL).mock(return_value=httpx.Response(200, json=STORED_RESPONSE))
+
+    async with make_client() as client:
+        result = await client.get_document(7)
+
+    assert route.called
+    assert result == STORED_DOCUMENT
+
+
+@respx.mock
+async def test_get_document_traduce_el_404_a_documento_inexistente() -> None:
+    respx.get(DOCUMENT_URL).mock(return_value=problem(404, "No existe un documento con id 7."))
+
+    async with make_client() as client:
+        with pytest.raises(DocumentNotFoundError, match="id 7") as caught:
+            await client.get_document(7)
+
+    assert caught.value.document_id == 7
+
+
+@respx.mock
+async def test_get_document_traduce_5xx_a_respuesta_inesperada() -> None:
+    respx.get(DOCUMENT_URL).mock(return_value=httpx.Response(500, text="boom"))
+
+    async with make_client() as client:
+        with pytest.raises(DocumentStoreUnexpectedResponseError, match="500"):
+            await client.get_document(7)
+
+
+@pytest.mark.parametrize(("side_effect", "expected"), NETWORK_FAILURES)
+@respx.mock
+async def test_get_document_traduce_los_fallos_de_red(
+    side_effect: Exception, expected: type[Exception]
+) -> None:
+    respx.get(DOCUMENT_URL).mock(side_effect=side_effect)
+
+    async with make_client() as client:
+        with pytest.raises(expected, match="document-store"):
+            await client.get_document(7)
+
+
+@respx.mock
+async def test_list_documents_pasa_skip_y_limit_y_mapea_la_lista() -> None:
+    route = respx.get(DOCUMENTS_URL).mock(
+        return_value=httpx.Response(200, json=[STORED_RESPONSE, {**STORED_RESPONSE, "id": 8}])
+    )
+
+    async with make_client() as client:
+        result = await client.list_documents(skip=20, limit=5)
+
+    assert dict(route.calls.last.request.url.params) == {"skip": "20", "limit": "5"}
+    assert [document.id for document in result] == [7, 8]
+    assert result[0] == STORED_DOCUMENT
+
+
+@respx.mock
+async def test_list_documents_devuelve_una_lista_vacia_si_no_hay_documentos() -> None:
+    respx.get(DOCUMENTS_URL).mock(return_value=httpx.Response(200, json=[]))
+
+    async with make_client() as client:
+        assert await client.list_documents(skip=0, limit=10) == []
+
+
+@pytest.mark.parametrize("body", [{"id": 7}, [{"id": "x"}]])
+@respx.mock
+async def test_list_documents_traduce_body_invalido_a_respuesta_inesperada(body: object) -> None:
+    respx.get(DOCUMENTS_URL).mock(return_value=httpx.Response(200, json=body))
+
+    async with make_client() as client:
+        with pytest.raises(DocumentStoreUnexpectedResponseError, match="formato"):
+            await client.list_documents(skip=0, limit=10)
+
+
+@respx.mock
+async def test_list_documents_traduce_5xx_a_respuesta_inesperada() -> None:
+    respx.get(DOCUMENTS_URL).mock(return_value=httpx.Response(500, text="boom"))
+
+    async with make_client() as client:
+        with pytest.raises(DocumentStoreUnexpectedResponseError, match="500"):
+            await client.list_documents(skip=0, limit=10)
+
+
+@respx.mock
+async def test_list_documents_traduce_un_4xx_a_rechazo() -> None:
+    # El orquestador ya validó skip y limit: un 400 es un contrato roto (502).
+    respx.get(DOCUMENTS_URL).mock(return_value=problem(400, "limit fuera de rango"))
+
+    async with make_client() as client:
+        with pytest.raises(DocumentStoreRejectedError, match="limit fuera de rango"):
+            await client.list_documents(skip=0, limit=10)
+
+
+@pytest.mark.parametrize(("side_effect", "expected"), NETWORK_FAILURES)
+@respx.mock
+async def test_list_documents_traduce_los_fallos_de_red(
+    side_effect: Exception, expected: type[Exception]
+) -> None:
+    respx.get(DOCUMENTS_URL).mock(side_effect=side_effect)
+
+    async with make_client() as client:
+        with pytest.raises(expected, match="document-store"):
+            await client.list_documents(skip=0, limit=10)
+
+
+@respx.mock
+async def test_update_document_envia_solo_el_nombre_y_mapea_el_200() -> None:
+    renamed = {**STORED_RESPONSE, "name": "nuevo nombre", "updated_at": "2026-11-09T15:30:00Z"}
+    route = respx.put(DOCUMENT_URL).mock(return_value=httpx.Response(200, json=renamed))
+
+    async with make_client() as client:
+        result = await client.update_document(7, name="nuevo nombre")
+
+    # document-store rechaza cualquier campo además de name (extra="forbid").
+    assert json.loads(route.calls.last.request.content) == {"name": "nuevo nombre"}
+    assert result.name == "nuevo nombre"
+    assert result.updated_at == datetime(2026, 11, 9, 15, 30, 0, tzinfo=UTC)
+
+
+@respx.mock
+async def test_update_document_traduce_el_404_a_documento_inexistente() -> None:
+    respx.put(DOCUMENT_URL).mock(return_value=problem(404, "No existe un documento con id 7."))
+
+    async with make_client() as client:
+        with pytest.raises(DocumentNotFoundError, match="id 7"):
+            await client.update_document(7, name="nuevo nombre")
+
+
+@respx.mock
+async def test_update_document_traduce_un_400_a_rechazo() -> None:
+    # El orquestador ya validó el nombre: un 400 es un contrato roto (502).
+    respx.put(DOCUMENT_URL).mock(return_value=problem(400, "name: demasiado largo"))
+
+    async with make_client() as client:
+        with pytest.raises(DocumentStoreRejectedError, match="demasiado largo"):
+            await client.update_document(7, name="nuevo nombre")
+
+
+@respx.mock
+async def test_update_document_traduce_5xx_a_respuesta_inesperada() -> None:
+    respx.put(DOCUMENT_URL).mock(return_value=httpx.Response(500, text="boom"))
+
+    async with make_client() as client:
+        with pytest.raises(DocumentStoreUnexpectedResponseError, match="500"):
+            await client.update_document(7, name="nuevo nombre")
+
+
+@pytest.mark.parametrize(("side_effect", "expected"), NETWORK_FAILURES)
+@respx.mock
+async def test_update_document_traduce_los_fallos_de_red(
+    side_effect: Exception, expected: type[Exception]
+) -> None:
+    respx.put(DOCUMENT_URL).mock(side_effect=side_effect)
+
+    async with make_client() as client:
+        with pytest.raises(expected, match="document-store"):
+            await client.update_document(7, name="nuevo nombre")
+
+
+@respx.mock
+async def test_delete_document_borra_el_documento_y_acepta_el_204() -> None:
+    route = respx.delete(DOCUMENT_URL).mock(return_value=httpx.Response(204))
+
+    async with make_client() as client:
+        assert await client.delete_document(7) is None
+
+    assert route.called
+
+
+@respx.mock
+async def test_delete_document_traduce_el_404_a_documento_inexistente() -> None:
+    respx.delete(DOCUMENT_URL).mock(return_value=problem(404, "No existe un documento con id 7."))
+
+    async with make_client() as client:
+        with pytest.raises(DocumentNotFoundError, match="id 7"):
+            await client.delete_document(7)
+
+
+@respx.mock
+async def test_delete_document_traduce_5xx_a_respuesta_inesperada() -> None:
+    respx.delete(DOCUMENT_URL).mock(return_value=httpx.Response(500, text="boom"))
+
+    async with make_client() as client:
+        with pytest.raises(DocumentStoreUnexpectedResponseError, match="500"):
+            await client.delete_document(7)
+
+
+@pytest.mark.parametrize(("side_effect", "expected"), NETWORK_FAILURES)
+@respx.mock
+async def test_delete_document_traduce_los_fallos_de_red(
+    side_effect: Exception, expected: type[Exception]
+) -> None:
+    respx.delete(DOCUMENT_URL).mock(side_effect=side_effect)
+
+    async with make_client() as client:
+        with pytest.raises(expected, match="document-store"):
+            await client.delete_document(7)
+
+
+# --- Retry: GET, PUT y DELETE son idempotentes; el POST no ---------------------
+
+NO_BACKOFF = RetryPolicy(max_attempts=3, backoff_seconds=0)
+
+
+@pytest.mark.parametrize(
+    ("method", "url", "ok", "operation"),
+    [
+        ("GET", DOCUMENTS_URL, httpx.Response(200, json=[]), lambda c: c.list_documents(0, 10)),
+        (
+            "GET",
+            DOCUMENT_URL,
+            httpx.Response(200, json=STORED_RESPONSE),
+            lambda c: c.get_document(7),
+        ),
+        (
+            "PUT",
+            DOCUMENT_URL,
+            httpx.Response(200, json=STORED_RESPONSE),
+            lambda c: c.update_document(7, name="informe"),
+        ),
+        ("DELETE", DOCUMENT_URL, httpx.Response(204), lambda c: c.delete_document(7)),
+    ],
+    ids=["listar", "ver", "renombrar", "borrar"],
+)
+@respx.mock
+async def test_las_operaciones_idempotentes_reintentan_un_5xx(method, url, ok, operation) -> None:
+    route = respx.route(method=method, url=url).mock(
+        side_effect=[httpx.Response(500, text="boom"), ok]
+    )
+
+    async with make_client(retry_policy=NO_BACKOFF) as client:
+        await operation(client)
+
+    assert route.call_count == 2
+
+
+@respx.mock
+async def test_el_alta_no_reintenta_un_5xx() -> None:
+    # Un POST que falló con 5xx pudo haber guardado igual: reintentarlo daría un 409.
+    route = respx.post(DOCUMENTS_URL).mock(return_value=httpx.Response(500, text="boom"))
+
+    async with make_client(retry_policy=NO_BACKOFF) as client:
+        with pytest.raises(DocumentStoreUnexpectedResponseError):
+            await client.create_document(NEW_DOCUMENT)
+
+    assert route.call_count == 1

@@ -28,9 +28,9 @@ orchestrator-service/
 │   ├── errors.py                # Excepciones → respuestas HTTP RFC 9457 Problem Details
 │   ├── routers/                 # Capa de presentación (Controller en MVC)
 │   │   ├── health.py            # GET /health
-│   │   └── documents.py         # POST /api/v1/documents
+│   │   └── documents.py         # POST, GET (lista y por id), PUT y DELETE /api/v1/documents
 │   ├── schemas/                 # Modelos (Model en MVC)
-│   │   ├── documents.py         # PdfDocument (interno), ProcessedDocument (respuesta pública)
+│   │   ├── documents.py         # PdfDocument (interno), ProcessedDocument (respuesta pública), DocumentUpdate (body del PUT)
 │   │   ├── pdf_extract.py       # ExtractionResult: contrato de POST /extract
 │   │   └── document_store.py    # NewDocument, StoredDocument: contrato de document-store
 │   ├── services/                # Capa de aplicación
@@ -40,7 +40,7 @@ orchestrator-service/
 │   └── clients/                 # Infraestructura de salida
 │       ├── base_client.py       # BaseClient: _request = Retry → Circuit Breaker → Bulkhead → red
 │       ├── pdf_extract_client.py# PdfExtractClient.extract()
-│       ├── document_store_client.py # DocumentStoreClient.create_document()
+│       ├── document_store_client.py # DocumentStoreClient: create, list, get, update y delete_document()
 │       ├── retry.py             # RetryPolicy
 │       ├── circuit_breaker.py   # CircuitBreaker (cerrado/abierto/half-open)
 │       └── bulkhead.py          # Bulkhead (en vuelo + cola acotada)
@@ -107,6 +107,22 @@ Service → Router: ProcessedDocument
 Router  → Cliente: 201                | errors.py → Problem Details 400/409/502/503/504
 ```
 
+### Diagrama de secuencia (CRUD: `GET`, `PUT` y `DELETE /api/v1/documents...`)
+
+```
+Cliente → Router: GET ?skip&limit | GET /{id} | PUT /{id} {"name"} | DELETE /{id}
+Router  → valida id (> 0), skip/limit y DocumentUpdate             [422 sin llamar a nadie]
+Router  → DocumentService.list/get/update/delete_document
+Service → DocumentStoreClient (mismo método)
+Client  → document-store: la misma ruta                             [Retry de 5xx: son idempotentes]
+Client  → Service: StoredDocument(s) | DocumentNotFoundError (404) / DocumentStore*Error
+Service → Router: ProcessedDocument(s) (ProcessedDocument.from_stored)
+Router  → Cliente: 200 / 204         | errors.py → Problem Details 404/422/502/503/504
+```
+
+pdf-extractext no participa: el CRUD solo delega en document-store, que no se publica por
+Traefik (el orquestador es el único punto de entrada).
+
 ## 4. Componentes clave
 
 ### `app/config.py` — Settings
@@ -145,7 +161,8 @@ Modelos Pydantic de request/response y objetos que cruzan capas. `PdfDocument` (
 inmutable, ADR-0001) vive acá porque lo usan services **y** clients, y `clients/` no puede importar
 de `services/`. `pdf_extract.py` y `document_store.py` tipan los contratos de los servicios; nunca
 se exponen tal cual: `ProcessedDocument` traduce el documento guardado a los nombres públicos del
-orquestador.
+orquestador (en todos los endpoints, también en la lista). `DocumentUpdate` valida el body del `PUT`
+con las mismas reglas que document-store, para que un nombre inválido sea `422` y no un `502`.
 
 ## 5. Concerns transversales
 

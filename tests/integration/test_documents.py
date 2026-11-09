@@ -91,6 +91,7 @@ def test_post_documents_extrae_guarda_y_devuelve_el_documento(client: TestClient
         "is_processed": True,
         "extracted_text": "# Informe\n\nTexto extraido",
         "processed_at": "2026-10-23T10:00:00Z",
+        "updated_at": "2026-10-23T10:00:00Z",
     }
 
 

@@ -276,3 +276,66 @@ async def test_get_document_traduce_los_fallos_de_red(
     async with make_client() as client:
         with pytest.raises(expected, match="document-store"):
             await client.get_document(7)
+
+
+@respx.mock
+async def test_list_documents_pasa_skip_y_limit_y_mapea_la_lista() -> None:
+    route = respx.get(DOCUMENTS_URL).mock(
+        return_value=httpx.Response(200, json=[STORED_RESPONSE, {**STORED_RESPONSE, "id": 8}])
+    )
+
+    async with make_client() as client:
+        result = await client.list_documents(skip=20, limit=5)
+
+    assert dict(route.calls.last.request.url.params) == {"skip": "20", "limit": "5"}
+    assert [document.id for document in result] == [7, 8]
+    assert result[0] == STORED_DOCUMENT
+
+
+@respx.mock
+async def test_list_documents_devuelve_una_lista_vacia_si_no_hay_documentos() -> None:
+    respx.get(DOCUMENTS_URL).mock(return_value=httpx.Response(200, json=[]))
+
+    async with make_client() as client:
+        assert await client.list_documents(skip=0, limit=10) == []
+
+
+@pytest.mark.parametrize("body", [{"id": 7}, [{"id": "x"}]])
+@respx.mock
+async def test_list_documents_traduce_body_invalido_a_respuesta_inesperada(body: object) -> None:
+    respx.get(DOCUMENTS_URL).mock(return_value=httpx.Response(200, json=body))
+
+    async with make_client() as client:
+        with pytest.raises(DocumentStoreUnexpectedResponseError, match="formato"):
+            await client.list_documents(skip=0, limit=10)
+
+
+@respx.mock
+async def test_list_documents_traduce_5xx_a_respuesta_inesperada() -> None:
+    respx.get(DOCUMENTS_URL).mock(return_value=httpx.Response(500, text="boom"))
+
+    async with make_client() as client:
+        with pytest.raises(DocumentStoreUnexpectedResponseError, match="500"):
+            await client.list_documents(skip=0, limit=10)
+
+
+@respx.mock
+async def test_list_documents_traduce_un_4xx_a_rechazo() -> None:
+    # El orquestador ya validó skip y limit: un 400 es un contrato roto (502).
+    respx.get(DOCUMENTS_URL).mock(return_value=problem(400, "limit fuera de rango"))
+
+    async with make_client() as client:
+        with pytest.raises(DocumentStoreRejectedError, match="limit fuera de rango"):
+            await client.list_documents(skip=0, limit=10)
+
+
+@pytest.mark.parametrize(("side_effect", "expected"), NETWORK_FAILURES)
+@respx.mock
+async def test_list_documents_traduce_los_fallos_de_red(
+    side_effect: Exception, expected: type[Exception]
+) -> None:
+    respx.get(DOCUMENTS_URL).mock(side_effect=side_effect)
+
+    async with make_client() as client:
+        with pytest.raises(expected, match="document-store"):
+            await client.list_documents(skip=0, limit=10)

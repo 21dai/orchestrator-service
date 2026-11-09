@@ -1,6 +1,7 @@
 from typing import NoReturn
 
 import httpx
+from pydantic import TypeAdapter, ValidationError
 
 from app.clients.base_client import BaseClient, UpstreamErrors, error_detail
 from app.exceptions import (
@@ -16,6 +17,9 @@ from app.exceptions import (
 from app.schemas.document_store import NewDocument, StoredDocument
 
 DOCUMENTS_PATH = "/api/v1/documents"
+
+#: `_parse` valida contra un modelo; la lista se valida con un TypeAdapter.
+STORED_DOCUMENT_LIST = TypeAdapter(list[StoredDocument])
 
 
 def document_path(document_id: int) -> str:
@@ -50,6 +54,25 @@ class DocumentStoreClient(BaseClient):
         if response.is_client_error:
             raise DocumentStoreRejectedError(
                 f"document-store rechazó el documento: {error_detail(response)}"
+            )
+        self._raise_unexpected(ERRORS, response)
+
+    async def list_documents(self, skip: int, limit: int) -> list[StoredDocument]:
+        """`GET /api/v1/documents?skip=&limit=`: una página, en orden de id ascendente."""
+        response = await self._call(
+            ERRORS, "GET", DOCUMENTS_PATH, params={"skip": skip, "limit": limit}
+        )
+
+        if response.status_code == httpx.codes.OK:
+            try:
+                return STORED_DOCUMENT_LIST.validate_json(response.content)
+            except ValidationError as exc:
+                raise DocumentStoreUnexpectedResponseError(
+                    "La respuesta de document-store no tiene el formato esperado."
+                ) from exc
+        if response.is_client_error:
+            raise DocumentStoreRejectedError(
+                f"document-store rechazó la solicitud: {error_detail(response)}"
             )
         self._raise_unexpected(ERRORS, response)
 

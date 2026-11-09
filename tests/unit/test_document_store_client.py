@@ -8,6 +8,7 @@ import respx
 from app.clients.bulkhead import Bulkhead
 from app.clients.circuit_breaker import CircuitBreaker, CircuitState
 from app.clients.document_store_client import DocumentStoreClient
+from app.clients.retry import RetryPolicy
 from app.exceptions import (
     DocumentAlreadyExistsError,
     DocumentNotFoundError,
@@ -433,3 +434,52 @@ async def test_delete_document_traduce_los_fallos_de_red(
     async with make_client() as client:
         with pytest.raises(expected, match="document-store"):
             await client.delete_document(7)
+
+
+# --- Retry: GET, PUT y DELETE son idempotentes; el POST no ---------------------
+
+NO_BACKOFF = RetryPolicy(max_attempts=3, backoff_seconds=0)
+
+
+@pytest.mark.parametrize(
+    ("method", "url", "ok", "operation"),
+    [
+        ("GET", DOCUMENTS_URL, httpx.Response(200, json=[]), lambda c: c.list_documents(0, 10)),
+        (
+            "GET",
+            DOCUMENT_URL,
+            httpx.Response(200, json=STORED_RESPONSE),
+            lambda c: c.get_document(7),
+        ),
+        (
+            "PUT",
+            DOCUMENT_URL,
+            httpx.Response(200, json=STORED_RESPONSE),
+            lambda c: c.update_document(7, name="informe"),
+        ),
+        ("DELETE", DOCUMENT_URL, httpx.Response(204), lambda c: c.delete_document(7)),
+    ],
+    ids=["listar", "ver", "renombrar", "borrar"],
+)
+@respx.mock
+async def test_las_operaciones_idempotentes_reintentan_un_5xx(method, url, ok, operation) -> None:
+    route = respx.route(method=method, url=url).mock(
+        side_effect=[httpx.Response(500, text="boom"), ok]
+    )
+
+    async with make_client(retry_policy=NO_BACKOFF) as client:
+        await operation(client)
+
+    assert route.call_count == 2
+
+
+@respx.mock
+async def test_el_alta_no_reintenta_un_5xx() -> None:
+    # Un POST que falló con 5xx pudo haber guardado igual: reintentarlo daría un 409.
+    route = respx.post(DOCUMENTS_URL).mock(return_value=httpx.Response(500, text="boom"))
+
+    async with make_client(retry_policy=NO_BACKOFF) as client:
+        with pytest.raises(DocumentStoreUnexpectedResponseError):
+            await client.create_document(NEW_DOCUMENT)
+
+    assert route.call_count == 1

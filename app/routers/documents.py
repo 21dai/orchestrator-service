@@ -1,9 +1,9 @@
-from typing import Any
+from typing import Annotated, Any
 
-from fastapi import APIRouter, Request, status
+from fastapi import APIRouter, Path, Query, Request, status
 
 from app.dependencies import DocumentServiceDep, SettingsDep
-from app.schemas.documents import ProcessedDocument
+from app.schemas.documents import DocumentUpdate, ProcessedDocument
 from app.services.pdf_loader import load_pdf
 from app.uploads import form_file, form_text, multipart_form
 
@@ -86,3 +86,60 @@ async def upload_document(
         name = form_text(form, "name")
 
     return await service.process_pdf(document, name=name)
+
+
+# --- CRUD: delega en document-store ------------------------------------------
+
+#: Id del documento en la ruta: entero positivo (si no, 422 sin llamar a document-store).
+DocumentId = Annotated[int, Path(gt=0, description="Id del documento en document-store.")]
+
+#: Errores comunes a todas las operaciones del CRUD, con Problem Details (RFC 9457).
+STORE_ERRORS: dict[int | str, dict[str, Any]] = {
+    status.HTTP_422_UNPROCESSABLE_CONTENT: _problem(
+        "Pedido inválido: id que no es un entero positivo, skip o limit fuera de rango, "
+        "o nombre vacío, de más de 255 caracteres o con campos extra."
+    ),
+    status.HTTP_502_BAD_GATEWAY: _problem("document-store respondió algo inválido."),
+    status.HTTP_503_SERVICE_UNAVAILABLE: _problem(
+        "document-store no está disponible o está saturado "
+        "(con Retry-After cuando se sabe cuándo reintentar)."
+    ),
+    status.HTTP_504_GATEWAY_TIMEOUT: _problem("document-store no respondió a tiempo."),
+}
+
+#: Las operaciones sobre un id, además, responden 404 si no existe.
+DOCUMENT_ERRORS: dict[int | str, dict[str, Any]] = {
+    status.HTTP_404_NOT_FOUND: _problem("No existe un documento con ese id."),
+    **STORE_ERRORS,
+}
+
+
+@router.get("", response_model=list[ProcessedDocument], responses=STORE_ERRORS)
+async def list_documents(
+    service: DocumentServiceDep,
+    skip: int = Query(default=0, ge=0, description="Documentos a saltear."),
+    limit: int = Query(default=10, ge=1, le=100, description="Máximo de documentos (1 a 100)."),
+) -> list[ProcessedDocument]:
+    """Lista los documentos guardados en document-store, en orden de id ascendente.
+    Lista vacía si no hay documentos en esa página."""
+    return await service.list_documents(skip=skip, limit=limit)
+
+
+@router.get("/{document_id}", response_model=ProcessedDocument, responses=DOCUMENT_ERRORS)
+async def get_document(document_id: DocumentId, service: DocumentServiceDep) -> ProcessedDocument:
+    """Devuelve un documento guardado, con su texto extraído."""
+    return await service.get_document(document_id)
+
+
+@router.put("/{document_id}", response_model=ProcessedDocument, responses=DOCUMENT_ERRORS)
+async def update_document(
+    document_id: DocumentId, body: DocumentUpdate, service: DocumentServiceDep
+) -> ProcessedDocument:
+    """Renombra un documento (lo único editable) y lo devuelve con `updated_at` actualizado."""
+    return await service.update_document(document_id, name=body.name)
+
+
+@router.delete("/{document_id}", status_code=status.HTTP_204_NO_CONTENT, responses=DOCUMENT_ERRORS)
+async def delete_document(document_id: DocumentId, service: DocumentServiceDep) -> None:
+    """Borra un documento de document-store. Responde 204 sin cuerpo."""
+    await service.delete_document(document_id)

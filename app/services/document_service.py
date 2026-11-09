@@ -21,12 +21,21 @@ class DocumentStoreGateway(Protocol):
 
     async def create_document(self, document: NewDocument) -> StoredDocument: ...
 
+    async def list_documents(self, skip: int, limit: int) -> list[StoredDocument]: ...
+
+    async def get_document(self, document_id: int) -> StoredDocument: ...
+
+    async def update_document(self, document_id: int, name: str) -> StoredDocument: ...
+
+    async def delete_document(self, document_id: int) -> None: ...
+
 
 class DocumentService:
-    """Orquesta el procesamiento de un PDF ya validado y convertido.
+    """Orquesta el procesamiento de un PDF ya validado y convertido, y el CRUD.
 
     Coordina los dos microservicios: pdf-extractext extrae el texto y
-    document-store lo guarda. El orquestador no persiste nada ni extrae
+    document-store lo guarda. Listar, ver, renombrar y borrar delegan solo en
+    document-store. El orquestador no persiste nada ni extrae
     texto: solo arma el documento (nombre y checksum) y traduce el resultado
     a la respuesta pública. Los fallos de los servicios llegan como
     excepciones de dominio de cada client y se dejan propagar para que
@@ -60,6 +69,25 @@ class DocumentService:
             )
         )
         return ProcessedDocument.from_stored(stored)
+
+    async def list_documents(self, skip: int, limit: int) -> list[ProcessedDocument]:
+        """Una página de documentos guardados, en orden de id ascendente."""
+        stored = await self._document_store.list_documents(skip=skip, limit=limit)
+        return [ProcessedDocument.from_stored(document) for document in stored]
+
+    async def get_document(self, document_id: int) -> ProcessedDocument:
+        """El documento con ese id (`DocumentNotFoundError` si no existe)."""
+        return ProcessedDocument.from_stored(await self._document_store.get_document(document_id))
+
+    async def update_document(self, document_id: int, name: str) -> ProcessedDocument:
+        """Renombra el documento: es el único campo editable en document-store."""
+        return ProcessedDocument.from_stored(
+            await self._document_store.update_document(document_id, name=name)
+        )
+
+    async def delete_document(self, document_id: int) -> None:
+        """Borra el documento (`DocumentNotFoundError` si no existe)."""
+        await self._document_store.delete_document(document_id)
 
     @staticmethod
     def _resolve_name(document: PdfDocument, name: str | None) -> str:

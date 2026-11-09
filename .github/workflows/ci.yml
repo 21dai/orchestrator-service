@@ -1,7 +1,7 @@
 # Pipeline de calidad (issue #20). Corre en cada push a main y en cada PR:
 #   1. lint + formato (ruff)
 #   2. tests unitarios e integración con cobertura mínima (pytest-cov, umbral en pyproject)
-#   3. build de la imagen Docker y smoke test de /health
+#   3. build de la imagen Docker, smoke test de /health, usuario no root y PORT configurable
 #   4. escaneo de secretos en el historial (trufflehog)
 #   5. convención de commits en PRs: tipo(#N): descripcion
 name: CI
@@ -44,8 +44,19 @@ jobs:
             sleep 1
           done
           echo "/health no respondió a tiempo"; docker logs orch; exit 1
+      - name: La imagen no corre como root
+        run: test "$(docker run --rm --entrypoint id orchestrator-service:ci -u)" != "0"
+      - name: Arranca healthy con otro PORT
+        run: |
+          docker run -d --rm --name orch-port -e PORT=9000 orchestrator-service:ci
+          for i in $(seq 1 30); do
+            estado=$(docker inspect --format '{{.State.Health.Status}}' orch-port)
+            if [ "$estado" = "healthy" ]; then exit 0; fi
+            sleep 1
+          done
+          echo "Con PORT=9000 el contenedor no quedó healthy ($estado)"; docker logs orch-port; exit 1
       - if: always()
-        run: docker stop orch || true
+        run: docker stop orch orch-port || true
 
   secretos:
     name: Escaneo de secretos
@@ -72,5 +83,7 @@ jobs:
           fallos=0
           while IFS= read -r msg; do
             if [[ "$msg" =~ $pattern ]]; then echo "OK   $msg"; else echo "MAL  $msg"; fallos=1; fi
-          done < <(git log --format=%s "origin/${{ github.base_ref }}..HEAD")
+          # --no-merges: en un PR, HEAD es el merge que arma GitHub ("Merge <sha> into <sha>"),
+          # que no es un commit del autor y no sigue el formato.
+          done < <(git log --no-merges --format=%s "origin/${{ github.base_ref }}..HEAD")
           exit $fallos

@@ -159,6 +159,11 @@ Las variables desconocidas se ignoran.
 |---|---|---|
 | `APP_NAME` | `orchestrator-service` | Nombre de la app (título de Swagger) |
 | `ENVIRONMENT` | `local` | Entorno de ejecución |
+| `HOST` | `0.0.0.0` | Interfaz en la que escucha uvicorn |
+| `PORT` | `8000` | Puerto de uvicorn. En Docker también lo usa el `HEALTHCHECK`: se cambia sin reconstruir la imagen |
+| `DEBUG` | `false` | `true` activa el reload de uvicorn. Solo para desarrollo |
+| `FORWARDED_ALLOW_IPS` | `127.0.0.1` | IPs o redes (CIDR) de las que se aceptan los headers `X-Forwarded-*`. Detrás de Traefik: la subred de la red del compose (p. ej. `172.28.0.0/16`) |
+| `GRACEFUL_SHUTDOWN_SECONDS` | `60` | Segundos que uvicorn espera las requests en curso al recibir `SIGTERM`. Menor que el `stop_grace_period` del compose |
 | `PDF_EXTRACT_BASE_URL` | `http://localhost:8000` | URL base de pdf-extractext. En Docker: `http://pdf-extractext:8000` (nombre de servicio) |
 | `DOCUMENT_STORE_BASE_URL` | `http://localhost:8002` | URL base de document-store. En Docker: `http://document-store:8000` |
 | `PDF_EXTRACT_TIMEOUT_SECONDS` | `30` | Timeout de lectura/escritura hacia pdf-extractext. Mayor que los 25 s en los que pdf-extractext responde 503 si no llega a extraer (`EXTRACT_MAX_WAIT_SECONDS`), para recibir ese 503 en vez de cortar una extracción que iba a terminar. Acepta también el nombre anterior, `HTTP_TIMEOUT_SECONDS` |
@@ -181,7 +186,7 @@ Requisitos: [uv](https://docs.astral.sh/uv/) (instala Python 3.14 solo).
 ```bash
 uv sync                          # instala dependencias (crea .venv)
 cp .env.example .env             # PowerShell: copy .env.example .env
-uv run python main.py            # levanta el servicio en :8000 con reload
+uv run python main.py            # levanta el servicio en HOST:PORT (default :8000); reload solo con DEBUG=true
 ```
 
 Swagger en `http://localhost:8000/docs`.
@@ -192,7 +197,7 @@ Con los defaults, cada uno va en su puerto:
 | Servicio | Puerto local | Cómo |
 |---|---|---|
 | pdf-extractext | `:8000` | su propio compose, desde `../pdf-extractext` (con Docker abierto) |
-| orquestador | `:8001` | `uv run uvicorn app.main:app --port 8001 --reload` |
+| orquestador | `:8001` | `PORT=8001` y `DEBUG=true` en `.env`, y `uv run python main.py` |
 | document-store | `:8002` | desde `../document-store`, con su MongoDB (ver su README) y `PORT=8002` |
 
 Usar `http://localhost:8001/...` en los ejemplos. `PDF_EXTRACT_BASE_URL` y
@@ -270,12 +275,21 @@ $env:INFRASTRUCTURE_DIR="C:\ruta\a\infrastructure"; $env:RUN_SYSTEM_TESTS=1; $en
 
 ### Imagen del orquestador
 
-Dockerfile multi-stage con `uv`; imagen final sobre `python:3.14-alpine`, puerto `8000`,
-`HEALTHCHECK` contra `/health`.
+Dockerfile multi-stage sobre `python:3.14-alpine`, con el binario de uv en versión fija
+(`ghcr.io/astral-sh/uv:0.11.7`, la misma que document-store y pdf-extractext). Por qué Alpine y
+no slim, con los números de grype: [ADR-0004](docs/decisions/0004-imagen-base-alpine-con-uv-fijo.md).
+
+- Corre con el usuario sin privilegios `appuser`, no como root.
+- Arranca con `CMD ["python", "main.py"]`: `main.py` lanza uvicorn con `HOST`, `PORT`,
+  `FORWARDED_ALLOW_IPS` y `GRACEFUL_SHUTDOWN_SECONDS` de la configuración, y `python` queda como
+  PID 1 para recibir el `SIGTERM` y apagarse en orden.
+- `ENV PORT=8000` es el default; el `HEALTHCHECK` consulta `/health` con Python (la imagen no
+  usa `wget`) en ese mismo `PORT`.
 
 ```bash
 docker build -t orchestrator-service .
 docker run --rm -p 8001:8000 -e PDF_EXTRACT_BASE_URL=http://host.docker.internal:8000 -e DOCUMENT_STORE_BASE_URL=http://host.docker.internal:8002 orchestrator-service
+docker run --rm -p 9000:9000 -e PORT=9000 orchestrator-service    # otro puerto, misma imagen
 ```
 
 ### Stack completo con Traefik
@@ -303,6 +317,11 @@ Dentro de la red, el orquestador llama a cada servicio por su nombre
 `DOCUMENT_STORE_BASE_URL=http://document-store:8000`, definidos en el compose). Los contenedores
 no publican puertos al host: solo Traefik expone 80/443. Traefik descubre las réplicas por
 los labels del compose y balancea entre ellas.
+
+El orquestador solo confía en los headers `X-Forwarded-*` de las IPs o redes de
+`FORWARDED_ALLOW_IPS` (default `127.0.0.1`). Detrás de Traefik, el compose tiene que pasarle la
+subred de la red compartida (por ejemplo `FORWARDED_ALLOW_IPS=172.28.0.0/16`, con esa subred fija
+en la red); si no, las URLs que arma el orquestador salen con `http://` en lugar de `https://`.
 
 ## Resiliencia
 

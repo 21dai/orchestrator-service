@@ -94,3 +94,35 @@ def test_settings_limita_el_pdf_a_10_mb_como_pdf_extractext() -> None:
     settings = Settings(_env_file=None)
 
     assert settings.max_pdf_size_bytes == 10 * 1024 * 1024
+
+
+def test_settings_tiene_defaults_del_servidor() -> None:
+    settings = Settings(_env_file=None)
+
+    assert settings.host == "0.0.0.0"
+    assert settings.port == 8000
+    # reload solo en desarrollo: apagado salvo DEBUG=true.
+    assert settings.debug is False
+    # Solo se confía en X-Forwarded-* de localhost hasta que el compose pase la red de Traefik.
+    assert settings.forwarded_allow_ips == "127.0.0.1"
+    assert settings.graceful_shutdown_seconds == 60
+
+
+def test_settings_lee_las_opciones_del_servidor_del_env_file(tmp_path: Path) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "HOST=127.0.0.1\n"
+        "PORT=9000\n"
+        "DEBUG=true\n"
+        "FORWARDED_ALLOW_IPS=172.28.0.0/16\n"
+        "GRACEFUL_SHUTDOWN_SECONDS=20\n",
+        encoding="utf-8",
+    )
+
+    settings = Settings(_env_file=env_file)
+
+    assert settings.host == "127.0.0.1"
+    assert settings.port == 9000
+    assert settings.debug is True
+    assert settings.forwarded_allow_ips == "172.28.0.0/16"
+    assert settings.graceful_shutdown_seconds == 20

@@ -23,28 +23,33 @@ COPY pyproject.toml uv.lock ./
 RUN uv sync --locked --no-dev --no-install-project
 
 COPY app ./app
+COPY main.py ./
 
 # --- Etapa 2: imagen final, sin uv ni herramientas de build ---------------
 FROM python:3.14-alpine
 
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PATH="/app/.venv/bin:${PATH}" \
+    PORT=8000
+
 WORKDIR /app
 
-# Actualizar paquetes del sistema para mitigar vulnerabilidades (zlib, busybox)
-# Nota: sqlite-libs 3.53.4-r0 permanece; Alpine 3.24 no tiene versión corregida en repositorio estable.
-# Usar edge (3.54.1) mezclaría repositorios inestables; se documenta como limitación conocida.
+# Actualizar paquetes del sistema para mitigar vulnerabilidades (zlib, busybox).
+# sqlite-libs no tiene versión corregida en el repositorio estable de Alpine
+# (limitación conocida, #24).
 RUN apk upgrade --no-cache
 
-COPY --from=builder /app/.venv /app/.venv
-COPY --from=builder /app/app /app/app
+COPY --from=builder /app /app
 
-ENV PATH="/app/.venv/bin:$PATH" \
-    PYTHONUNBUFFERED=1
+# Solo documentación: el puerto real lo define PORT (main.py lo lee de Settings).
+EXPOSE ${PORT}
 
-EXPOSE 8000
+# /health solo dice que el proceso está vivo. Se consulta con Python (no con
+# wget) en el mismo PORT que usa la app; funciona igual en Alpine y en slim.
+HEALTHCHECK --interval=10s --timeout=3s --start-period=10s --retries=3 \
+    CMD ["python", "-c", "import os, urllib.request; urllib.request.urlopen(f\"http://127.0.0.1:{os.environ.get('PORT', '8000')}/health\", timeout=2)"]
 
-HEALTHCHECK --interval=30s --timeout=3s CMD wget -qO- http://127.0.0.1:8000/health || exit 1
-
-# --proxy-headers: detras de Traefik (que termina TLS), tomar esquema y cliente
-# reales de X-Forwarded-*; sin esto las URLs generadas dicen http://.
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", \
-     "--proxy-headers", "--forwarded-allow-ips=*"]
+# Forma exec: python queda como PID 1 y recibe el SIGTERM (apagado ordenado).
+# main.py lanza uvicorn con HOST, PORT, proxies y timeout de Settings.
+CMD ["python", "main.py"]

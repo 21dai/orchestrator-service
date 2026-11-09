@@ -92,6 +92,14 @@ class DocumentStoreClient(BaseClient):
             return self._parse(ERRORS, response, StoredDocument)
         self._raise_for_document(response, document_id)
 
+    async def delete_document(self, document_id: int) -> None:
+        """`DELETE /api/v1/documents/{id}`: borra el documento (204 sin cuerpo)."""
+        response = await self._call(ERRORS, "DELETE", document_path(document_id))
+
+        if response.status_code == httpx.codes.NO_CONTENT:
+            return
+        self._raise_for_document(response, document_id)
+
     def _raise_for_document(self, response: httpx.Response, document_id: int) -> NoReturn:
         """Errores de las operaciones sobre un documento por id.
 

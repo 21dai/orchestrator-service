@@ -393,3 +393,43 @@ async def test_update_document_traduce_los_fallos_de_red(
     async with make_client() as client:
         with pytest.raises(expected, match="document-store"):
             await client.update_document(7, name="nuevo nombre")
+
+
+@respx.mock
+async def test_delete_document_borra_el_documento_y_acepta_el_204() -> None:
+    route = respx.delete(DOCUMENT_URL).mock(return_value=httpx.Response(204))
+
+    async with make_client() as client:
+        assert await client.delete_document(7) is None
+
+    assert route.called
+
+
+@respx.mock
+async def test_delete_document_traduce_el_404_a_documento_inexistente() -> None:
+    respx.delete(DOCUMENT_URL).mock(return_value=problem(404, "No existe un documento con id 7."))
+
+    async with make_client() as client:
+        with pytest.raises(DocumentNotFoundError, match="id 7"):
+            await client.delete_document(7)
+
+
+@respx.mock
+async def test_delete_document_traduce_5xx_a_respuesta_inesperada() -> None:
+    respx.delete(DOCUMENT_URL).mock(return_value=httpx.Response(500, text="boom"))
+
+    async with make_client() as client:
+        with pytest.raises(DocumentStoreUnexpectedResponseError, match="500"):
+            await client.delete_document(7)
+
+
+@pytest.mark.parametrize(("side_effect", "expected"), NETWORK_FAILURES)
+@respx.mock
+async def test_delete_document_traduce_los_fallos_de_red(
+    side_effect: Exception, expected: type[Exception]
+) -> None:
+    respx.delete(DOCUMENT_URL).mock(side_effect=side_effect)
+
+    async with make_client() as client:
+        with pytest.raises(expected, match="document-store"):
+            await client.delete_document(7)

@@ -83,5 +83,7 @@ jobs:
           fallos=0
           while IFS= read -r msg; do
             if [[ "$msg" =~ $pattern ]]; then echo "OK   $msg"; else echo "MAL  $msg"; fallos=1; fi
-          done < <(git log --format=%s "origin/${{ github.base_ref }}..HEAD")
+          # --no-merges: en un PR, HEAD es el merge que arma GitHub ("Merge <sha> into <sha>"),
+          # que no es un commit del autor y no sigue el formato.
+          done < <(git log --no-merges --format=%s "origin/${{ github.base_ref }}..HEAD")
           exit $fallos

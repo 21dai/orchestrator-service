@@ -1,13 +1,30 @@
 # syntax=docker/dockerfile:1
-FROM ghcr.io/astral-sh/uv:python3.14-alpine AS builder
+
+# --- Etapa 1: construir el entorno virtual con uv --------------------------
+# Base Alpine (y no slim como document-store y pdf-extractext): con grype da
+# 17 vulnerabilidades contra 184 de slim. Ver docs/decisions/0004.
+FROM python:3.14-alpine AS builder
+
+# Binario de uv con versión fija (la misma que los otros dos servicios), solo
+# en esta etapa: dos builds del mismo commit dan la misma imagen.
+COPY --from=ghcr.io/astral-sh/uv:0.11.7 /uv /bin/uv
+
+# Bytecode precompilado (arranque más rápido) y copias reales en vez de links,
+# para poder mover el .venv a la imagen final. Se usa el Python de la imagen.
+ENV UV_COMPILE_BYTECODE=1 \
+    UV_LINK_MODE=copy \
+    UV_PYTHON_DOWNLOADS=never
 
 WORKDIR /app
 
+# Primero solo las dependencias: esta capa se reutiliza mientras no cambie
+# uv.lock, aunque cambie el código.
 COPY pyproject.toml uv.lock ./
 RUN uv sync --locked --no-dev --no-install-project
 
 COPY app ./app
 
+# --- Etapa 2: imagen final, sin uv ni herramientas de build ---------------
 FROM python:3.14-alpine
 
 WORKDIR /app

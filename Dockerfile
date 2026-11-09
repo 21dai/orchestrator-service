@@ -37,10 +37,15 @@ WORKDIR /app
 
 # Actualizar paquetes del sistema para mitigar vulnerabilidades (zlib, busybox).
 # sqlite-libs no tiene versión corregida en el repositorio estable de Alpine
-# (limitación conocida, #24).
-RUN apk upgrade --no-cache
+# (limitación conocida, #24). Después, un usuario de sistema sin privilegios:
+# si alguien explota el servicio o una dependencia, no tiene root.
+RUN apk upgrade --no-cache \
+ && addgroup -S appgroup \
+ && adduser -S -G appgroup -H -s /sbin/nologin appuser
 
-COPY --from=builder /app /app
+COPY --from=builder --chown=appuser:appgroup /app /app
+
+USER appuser
 
 # Solo documentación: el puerto real lo define PORT (main.py lo lee de Settings).
 EXPOSE ${PORT}

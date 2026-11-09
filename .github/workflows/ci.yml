@@ -1,7 +1,7 @@
 # Pipeline de calidad (issue #20). Corre en cada push a main y en cada PR:
 #   1. lint + formato (ruff)
 #   2. tests unitarios e integración con cobertura mínima (pytest-cov, umbral en pyproject)
-#   3. build de la imagen Docker y smoke test de /health
+#   3. build de la imagen Docker, smoke test de /health y usuario no root
 #   4. escaneo de secretos en el historial (trufflehog)
 #   5. convención de commits en PRs: tipo(#N): descripcion
 name: CI
@@ -44,6 +44,8 @@ jobs:
             sleep 1
           done
           echo "/health no respondió a tiempo"; docker logs orch; exit 1
+      - name: La imagen no corre como root
+        run: test "$(docker run --rm --entrypoint id orchestrator-service:ci -u)" != "0"
       - if: always()
         run: docker stop orch || true
 

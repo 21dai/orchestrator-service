@@ -91,6 +91,7 @@ async def test_process_pdf_extrae_el_texto_y_guarda_el_documento_en_document_sto
         is_processed=True,
         extracted_text="# Informe\n\nTexto extraido",
         processed_at=CREATED_AT,
+        updated_at=CREATED_AT,
     )
 
 

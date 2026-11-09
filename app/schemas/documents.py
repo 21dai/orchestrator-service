@@ -46,6 +46,9 @@ class ProcessedDocument(BaseModel):
     is_processed: bool = Field(description="Si el texto ya fue extraído.")
     extracted_text: str = Field(description="Texto extraído del PDF, en Markdown.")
     processed_at: datetime = Field(description="Momento en que se guardó el documento.")
+    updated_at: datetime = Field(
+        description="Última modificación del documento (igual a processed_at si nunca se editó)."
+    )
 
     @classmethod
     def from_stored(cls, stored: StoredDocument) -> ProcessedDocument:
@@ -59,4 +62,5 @@ class ProcessedDocument(BaseModel):
             is_processed=stored.is_processed,
             extracted_text=stored.extracted_text,
             processed_at=stored.created_at,
+            updated_at=stored.updated_at,
         )

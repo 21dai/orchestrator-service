@@ -10,6 +10,7 @@ from app.clients.circuit_breaker import CircuitBreaker, CircuitState
 from app.clients.document_store_client import DocumentStoreClient
 from app.exceptions import (
     DocumentAlreadyExistsError,
+    DocumentNotFoundError,
     DocumentStoreCircuitOpenError,
     DocumentStoreOverloadedError,
     DocumentStoreRejectedError,
@@ -219,3 +220,59 @@ async def test_un_409_no_cuenta_como_fallo_para_el_circuit_breaker() -> None:
                 await client.create_document(NEW_DOCUMENT)
 
     assert breaker.state is CircuitState.CLOSED
+
+
+# --- CRUD: GET, PUT y DELETE de un documento, y la lista -----------------------
+
+DOCUMENT_URL = f"{DOCUMENTS_URL}/7"
+
+STORED_DOCUMENT = StoredDocument.model_validate(STORED_RESPONSE)
+
+#: Fallos de red de cualquier operación y la excepción de dominio que corresponde.
+NETWORK_FAILURES = [
+    (httpx.ConnectError("refused"), DocumentStoreUnavailableError),
+    (httpx.ReadTimeout("timeout"), DocumentStoreTimeoutError),
+]
+
+
+@respx.mock
+async def test_get_document_pide_el_documento_por_id_y_mapea_el_200() -> None:
+    route = respx.get(DOCUMENT_URL).mock(return_value=httpx.Response(200, json=STORED_RESPONSE))
+
+    async with make_client() as client:
+        result = await client.get_document(7)
+
+    assert route.called
+    assert result == STORED_DOCUMENT
+
+
+@respx.mock
+async def test_get_document_traduce_el_404_a_documento_inexistente() -> None:
+    respx.get(DOCUMENT_URL).mock(return_value=problem(404, "No existe un documento con id 7."))
+
+    async with make_client() as client:
+        with pytest.raises(DocumentNotFoundError, match="id 7") as caught:
+            await client.get_document(7)
+
+    assert caught.value.document_id == 7
+
+
+@respx.mock
+async def test_get_document_traduce_5xx_a_respuesta_inesperada() -> None:
+    respx.get(DOCUMENT_URL).mock(return_value=httpx.Response(500, text="boom"))
+
+    async with make_client() as client:
+        with pytest.raises(DocumentStoreUnexpectedResponseError, match="500"):
+            await client.get_document(7)
+
+
+@pytest.mark.parametrize(("side_effect", "expected"), NETWORK_FAILURES)
+@respx.mock
+async def test_get_document_traduce_los_fallos_de_red(
+    side_effect: Exception, expected: type[Exception]
+) -> None:
+    respx.get(DOCUMENT_URL).mock(side_effect=side_effect)
+
+    async with make_client() as client:
+        with pytest.raises(expected, match="document-store"):
+            await client.get_document(7)

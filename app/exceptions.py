@@ -77,6 +77,14 @@ class DocumentAlreadyExistsError(DocumentStoreError):
         self.checksum = checksum
 
 
+class DocumentNotFoundError(DocumentStoreError):
+    """document-store no tiene un documento con ese id (HTTP 404)."""
+
+    def __init__(self, document_id: int) -> None:
+        super().__init__(f"No existe un documento con id {document_id}.")
+        self.document_id = document_id
+
+
 class DocumentStoreRejectedError(DocumentStoreError):
     """document-store rechazó los datos con otro 4xx.
 

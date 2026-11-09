@@ -339,3 +339,57 @@ async def test_list_documents_traduce_los_fallos_de_red(
     async with make_client() as client:
         with pytest.raises(expected, match="document-store"):
             await client.list_documents(skip=0, limit=10)
+
+
+@respx.mock
+async def test_update_document_envia_solo_el_nombre_y_mapea_el_200() -> None:
+    renamed = {**STORED_RESPONSE, "name": "nuevo nombre", "updated_at": "2026-11-09T15:30:00Z"}
+    route = respx.put(DOCUMENT_URL).mock(return_value=httpx.Response(200, json=renamed))
+
+    async with make_client() as client:
+        result = await client.update_document(7, name="nuevo nombre")
+
+    # document-store rechaza cualquier campo además de name (extra="forbid").
+    assert json.loads(route.calls.last.request.content) == {"name": "nuevo nombre"}
+    assert result.name == "nuevo nombre"
+    assert result.updated_at == datetime(2026, 11, 9, 15, 30, 0, tzinfo=UTC)
+
+
+@respx.mock
+async def test_update_document_traduce_el_404_a_documento_inexistente() -> None:
+    respx.put(DOCUMENT_URL).mock(return_value=problem(404, "No existe un documento con id 7."))
+
+    async with make_client() as client:
+        with pytest.raises(DocumentNotFoundError, match="id 7"):
+            await client.update_document(7, name="nuevo nombre")
+
+
+@respx.mock
+async def test_update_document_traduce_un_400_a_rechazo() -> None:
+    # El orquestador ya validó el nombre: un 400 es un contrato roto (502).
+    respx.put(DOCUMENT_URL).mock(return_value=problem(400, "name: demasiado largo"))
+
+    async with make_client() as client:
+        with pytest.raises(DocumentStoreRejectedError, match="demasiado largo"):
+            await client.update_document(7, name="nuevo nombre")
+
+
+@respx.mock
+async def test_update_document_traduce_5xx_a_respuesta_inesperada() -> None:
+    respx.put(DOCUMENT_URL).mock(return_value=httpx.Response(500, text="boom"))
+
+    async with make_client() as client:
+        with pytest.raises(DocumentStoreUnexpectedResponseError, match="500"):
+            await client.update_document(7, name="nuevo nombre")
+
+
+@pytest.mark.parametrize(("side_effect", "expected"), NETWORK_FAILURES)
+@respx.mock
+async def test_update_document_traduce_los_fallos_de_red(
+    side_effect: Exception, expected: type[Exception]
+) -> None:
+    respx.put(DOCUMENT_URL).mock(side_effect=side_effect)
+
+    async with make_client() as client:
+        with pytest.raises(expected, match="document-store"):
+            await client.update_document(7, name="nuevo nombre")

@@ -84,6 +84,14 @@ class DocumentStoreClient(BaseClient):
             return self._parse(ERRORS, response, StoredDocument)
         self._raise_for_document(response, document_id)
 
+    async def update_document(self, document_id: int, name: str) -> StoredDocument:
+        """`PUT /api/v1/documents/{id}`: renombra el documento (lo único editable)."""
+        response = await self._call(ERRORS, "PUT", document_path(document_id), json={"name": name})
+
+        if response.status_code == httpx.codes.OK:
+            return self._parse(ERRORS, response, StoredDocument)
+        self._raise_for_document(response, document_id)
+
     def _raise_for_document(self, response: httpx.Response, document_id: int) -> NoReturn:
         """Errores de las operaciones sobre un documento por id.
 

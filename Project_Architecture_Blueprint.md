@@ -44,12 +44,12 @@ orchestrator-service/
 │       ├── retry.py             # RetryPolicy
 │       ├── circuit_breaker.py   # CircuitBreaker (cerrado/abierto/half-open)
 │       └── bulkhead.py          # Bulkhead (en vuelo + cola acotada)
-├── docs/decisions/              # ADRs (0001 representación del PDF, 0002 resiliencia, 0003 extraer y guardar)
+├── docs/decisions/              # ADRs (0001 representación del PDF, 0002 resiliencia, 0003 extraer y guardar, 0004 imagen base)
 ├── tests/
 │   ├── unit/                    # Tests aislados, sin I/O real (respx para HTTP)
 │   ├── integration/             # Tests de la app (FastAPI TestClient)
 │   └── system/                  # Punta a punta contra el stack desplegado (opt-in)
-├── main.py                      # Entrypoint de desarrollo: uv run python main.py
+├── main.py                      # Entrypoint (local y Docker): uvicorn con HOST, PORT y opciones de Settings
 ├── pyproject.toml         # Dependencias + config (ruff, pytest)
 ├── uv.lock                # Lockfile (builds reproducibles)
 ├── Dockerfile             # Imagen multi-stage con uv
@@ -176,9 +176,13 @@ resiliencia se prueban sin dormir: `RetryPolicy` recibe `sleep`, `CircuitBreaker
 
 ## 7. Despliegue
 
-- **Dockerfile multi-stage:** builder con `ghcr.io/astral-sh/uv` sincroniza deps con `uv sync --locked --no-dev`;
-  runtime sobre `python:3.14-alpine` copiando solo `.venv` y `app/`. `--locked` garantiza builds reproducibles.
-- `HEALTHCHECK` contra `/health`. Puerto 8000.
+- **Dockerfile multi-stage:** builder sobre `python:3.14-alpine` con uv en versión fija
+  (`ghcr.io/astral-sh/uv:0.11.7`) que sincroniza deps con `uv sync --locked --no-dev`; runtime sobre
+  `python:3.14-alpine` con `.venv`, `app/` y `main.py`. `--locked` y las versiones fijas garantizan builds
+  reproducibles. Alpine en lugar de slim por los resultados de grype (ADR-0004).
+- Corre como `appuser` (sin privilegios) con `CMD ["python", "main.py"]`: host, puerto, proxies confiables y
+  apagado ordenado salen de `Settings`. `PORT` (default 8000) se cambia sin reconstruir la imagen.
+- `HEALTHCHECK` contra `/health` con Python, en el mismo `PORT`.
 - El stack completo (Traefik + réplicas del orquestador + pdf-extractext + MongoDB) se levanta desde la
   carpeta hermana `../infrastructure` (`docker compose up -d --build`, `--scale orchestrator=N`).
   Traefik expone `https://orchestrator.proyecto.localhost` y balancea entre réplicas.

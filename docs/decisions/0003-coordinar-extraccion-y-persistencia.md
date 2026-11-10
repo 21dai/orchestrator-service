@@ -60,6 +60,11 @@ su propio Bulkhead; desde el ADR-0005 el Circuit Breaker de cada uno está en Tr
 - Contras: no hay nada que compensar. `/extract` no guarda nada; si falla el guardado, no
   queda ningún estado a medias en pdf-extractext.
 - Rechazada: sería complejidad sin un problema que resolver.
+- Precisión: el flujo **sí** es una SAGA orquestada (una transacción local por servicio,
+  coordinadas por el orquestador); lo que no tiene son compensaciones, porque la única
+  escritura es el último paso. Si se adoptara "buscar el checksum antes de extraer"
+  registrando primero el documento, haría falta compensar con un `DELETE` cuando falla la
+  extracción. Ver la sección "SAGA con orquestador" del README.
 
 ### Devolver el documento existente en lugar de `409`
 

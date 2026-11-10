@@ -70,8 +70,10 @@ y aplica un circuit breaker por servicio. Cada client traduce las respuestas y l
 servicio (4xx, 5xx, timeout, sin conexión, circuito abierto en Traefik, bulkhead lleno) a
 excepciones de dominio.
 
-No hace falta una Saga: `/extract` no guarda nada, así que si falla el guardado no queda
-nada a medias que compensar. El flujo y sus decisiones están en
+El alta es una SAGA orquestada sin compensaciones: `/extract` no guarda nada y el guardado es
+el último paso, así que si algo falla no queda nada a medias que deshacer (ver
+[SAGA con orquestador](#saga-con-orquestador-por-qué-el-flujo-no-necesita-compensaciones)).
+El flujo y sus decisiones están en
 [ADR-0003](docs/decisions/0003-coordinar-extraccion-y-persistencia.md).
 
 Regla de dependencias: **Router → Service → Client**. Ningún router habla HTTP con otro
@@ -446,6 +448,46 @@ detalle y las razones (basadas en mediciones de carga sobre pdf-extractext) est�
 Orden por cada intento: `Retry → Bulkhead → red (Traefik → circuit breaker → servicio)`. Con el
 circuito abierto Traefik responde `503` sin `Retry-After`; el orquestador no lo reintenta y
 responde `503` Problem Details.
+
+Otros dos patrones del sistema viven fuera del orquestador, donde corresponden:
+
+| Patrón | Dónde | Qué hace |
+|---|---|---|
+| **Rate Limit** | Traefik, en la entrada pública del orquestador (`../infrastructure`) | Cada IP de origen puede hacer en promedio 20 requests por segundo (ráfagas de 40); lo que pasa del límite recibe `429` sin llegar al orquestador |
+| **Cache** | document-store, con Redis (cache-aside) | `GET /api/v1/documents/{id}` responde desde Redis sin consultar MongoDB; el alta, el renombre y el borrado lo mantienen al día. Si Redis se cae, lee de MongoDB |
+
+El orquestador no tiene cache propio a propósito: no guarda estado (12-Factor VI), y el dueño
+de los datos, que sabe cuándo cambian, es document-store.
+
+### SAGA con orquestador: por qué el flujo no necesita compensaciones
+
+Una **SAGA** reemplaza una transacción distribuida por una secuencia de transacciones locales,
+una por servicio; si un paso falla, el orquestador ejecuta **compensaciones** que deshacen los
+pasos anteriores que ya habían guardado algo. Este servicio **es** el orquestador de esa
+secuencia: el alta de un PDF toca dos microservicios y él decide el orden y qué hacer ante cada
+falla.
+
+```
+POST /api/v1/documents
+  1. pdf-extractext: POST /extract       → no guarda nada (sin estado)
+  2. document-store: POST /documents     → guarda el documento (única escritura)
+```
+
+| Falla en… | Qué queda guardado | Compensación |
+|---|---|---|
+| Paso 1 (extracción) | nada: document-store todavía no se llamó | ninguna: se responde el error |
+| Paso 2 (guardado) | nada: la extracción no dejó estado en pdf-extractext | ninguna: se responde el error |
+
+Como hay **una sola escritura y es el último paso**, nunca queda un estado a medias que
+compensar. El orden no es casual: se diseñó así para que la consistencia no dependa de
+compensaciones (ver [ADR-0003](docs/decisions/0003-coordinar-extraccion-y-persistencia.md)).
+
+**Cuándo sí haría falta**: si el flujo guardara algo antes del último paso. Por ejemplo, para no
+gastar una extracción en un PDF repetido, se podría registrar primero el documento en
+document-store (sin texto), después extraer y completar el registro. Ese diseño necesita la
+compensación: si la extracción falla, el orquestador borra el registro
+(`DELETE /api/v1/documents/{id}`). Hoy se eligió el orden que no la necesita; el costo es que un
+PDF repetido gasta una extracción antes de recibir el `409`.
 
 ## Arquitectura
 

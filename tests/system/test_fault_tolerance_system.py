@@ -1,5 +1,9 @@
 """Fallas de persistencia contra el stack real: se detiene document-store.
 
+El orquestador llama a document-store a través del entrypoint interno de
+Traefik, que tiene el circuit breaker (`cb-document-store`, ADR-0005): con
+document-store caído, Traefik abre el circuito y responde 503 al instante.
+
 Doble opt-in: además de `RUN_SYSTEM_TESTS=1` exigen `RUN_FAULT_TESTS=1`,
 porque detienen contenedores del stack de `../infrastructure` (ver
 `INFRASTRUCTURE_DIR` en conftest.py). El fixture siempre vuelve a levantar el
@@ -37,9 +41,17 @@ pytestmark = [
 DOCUMENTS = "/api/v1/documents"
 DOCUMENT_STORE = "document-store"
 
-# Mismo valor que CIRCUIT_BREAKER_RECOVERY_SECONDS del orquestador desplegado
-# (default 30 s): lo máximo que el circuito puede seguir abierto.
-CIRCUIT_BREAKER_RECOVERY_SECONDS = float(os.environ.get("CIRCUIT_BREAKER_RECOVERY_SECONDS", "30"))
+# fallbackduration + recoveryduration del middleware cb-document-store de
+# Traefik (30 s + 10 s en ../infrastructure/docker-compose.yml): lo máximo que
+# el circuito puede seguir abierto o dejando pasar solo parte del tráfico.
+TRAEFIK_CIRCUIT_SECONDS = float(os.environ.get("TRAEFIK_CIRCUIT_SECONDS", "40"))
+# Con el circuito abierto Traefik responde sin llamar a document-store: una
+# respuesta en menos de este tiempo muestra que el circuito está abierto (una
+# conexión fallida a document-store tarda varios segundos).
+CIRCUIT_OPEN_MAX_SECONDS = 1.0
+# Requests que alcanzan para abrir el circuito: con document-store caído
+# fallan todas (más de 30 % de errores de red).
+REQUESTS_TO_OPEN = 5
 # Margen para que document-store reconecte con MongoDB y Traefik/Docker DNS
 # vuelvan a resolverlo.
 RECOVERY_MARGIN_SECONDS = 30
@@ -58,11 +70,10 @@ def post_until_not_503(
     """Reintenta mientras el orquestador responda 503, hasta `timeout` segundos.
 
     Por qué no alcanza con esperar a que document-store esté `healthy`: si
-    durante la caída se acumularon `CIRCUIT_BREAKER_FAILURE_THRESHOLD` fallos
-    (cada request suma uno por intento del Retry), el Circuit Breaker del
-    orquestador queda abierto y responde 503 sin llamar a nadie hasta que
-    pasan `CIRCUIT_BREAKER_RECOVERY_SECONDS`. En lugar de un `sleep` fijo de
-    ese tiempo (lento cuando el circuito nunca se abrió), se reintenta cada
+    durante la caída se abrió el circuito de Traefik, responde 503 sin llamar
+    a nadie durante `fallbackduration` y después deja pasar solo parte del
+    tráfico durante `recoveryduration`. En lugar de un `sleep` fijo de ese
+    tiempo (lento cuando el circuito nunca se abrió), se reintenta cada
     segundo y se corta en cuanto responde otra cosa.
     """
     deadline = time.monotonic() + timeout
@@ -100,8 +111,8 @@ def test_document_store_caido_responde_503_y_al_volver_se_guarda_el_mismo_pdf(
 ) -> None:
     caido = post_pdf(http, pdf_file)
 
-    # El orquestador no llega a document-store (tras los reintentos de
-    # conexión): 503 Problem Details que nombra al servicio caído.
+    # Traefik no llega a document-store (502) y el orquestador lo informa
+    # como 503 Problem Details que nombra al servicio caído.
     assert caido.status_code == 503, caido.text
     assert caido.headers["content-type"] == "application/problem+json"
     body = caido.json()
@@ -113,6 +124,34 @@ def test_document_store_caido_responde_503_y_al_volver_se_guarda_el_mismo_pdf(
     # El mismo PDF se guarda: si el intento fallido hubiera dejado algo a
     # medias con ese checksum, document-store respondería 409.
     response = post_until_not_503(
-        http, pdf_file, timeout=CIRCUIT_BREAKER_RECOVERY_SECONDS + RECOVERY_MARGIN_SECONDS
+        http, pdf_file, timeout=TRAEFIK_CIRCUIT_SECONDS + RECOVERY_MARGIN_SECONDS
+    )
+    assert response.status_code == 201, response.text
+
+
+def test_con_document_store_caido_traefik_abre_el_circuito_y_corta_al_instante(
+    http: httpx.Client,
+    pdf_file: tuple[str, bytes],
+    document_store_down: Callable[[], None],
+) -> None:
+    elapsed: list[float] = []
+    for _ in range(REQUESTS_TO_OPEN):
+        start = time.monotonic()
+        response = post_pdf(http, pdf_file)
+        elapsed.append(time.monotonic() - start)
+        assert response.status_code == 503, response.text
+        assert response.headers["content-type"] == "application/problem+json"
+        # Traefik no manda Retry-After con el circuito abierto.
+        assert "retry-after" not in response.headers
+
+    # Las primeras esperan a que falle la conexión; con el circuito abierto,
+    # Traefik corta sin llamar a document-store.
+    assert elapsed[-1] < CIRCUIT_OPEN_MAX_SECONDS, elapsed
+
+    document_store_down()
+
+    # Pasados fallbackduration + recoveryduration el circuito se cierra.
+    response = post_until_not_503(
+        http, pdf_file, timeout=TRAEFIK_CIRCUIT_SECONDS + RECOVERY_MARGIN_SECONDS
     )
     assert response.status_code == 201, response.text

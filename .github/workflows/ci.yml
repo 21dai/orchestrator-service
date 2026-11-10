@@ -2,7 +2,8 @@
 #   1. lint + formato (ruff)
 #   2. tests unitarios e integración con cobertura mínima (pytest-cov, umbral en pyproject)
 #   3. build de la imagen Docker, smoke test de /health, usuario no root y PORT configurable
-#   4. escaneo de secretos en el historial (trufflehog)
+#   4. escaneo de secretos en el historial (trufflehog) y vulnerabilidades
+#      conocidas en las dependencias (pip-audit sobre el uv.lock)
 #   5. convención de commits en PRs: tipo(#N): descripcion
 name: CI
 
@@ -68,6 +69,20 @@ jobs:
       - uses: trufflesecurity/trufflehog@main
         with:
           extra_args: --only-verified
+
+  dependencias:
+    name: Vulnerabilidades en las dependencias
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v7
+      # Mismo paso que pdf-extractext: pip-audit contra la base de vulnerabilidades
+      # de PyPI (OSV), sobre las versiones exactas del uv.lock y sin las de desarrollo
+      # (son las que van en la imagen). Falla si alguna tiene una vulnerabilidad conocida.
+      - name: pip-audit sobre las versiones exactas del uv.lock
+        run: |
+          uv export --no-hashes --no-dev --no-emit-project --format requirements-txt -o requirements.txt
+          uvx pip-audit -r requirements.txt --no-deps --disable-pip
 
   commits:
     name: Convención de commits

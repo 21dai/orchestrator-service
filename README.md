@@ -288,6 +288,17 @@ uv run pytest                    # unitarios + integración; exige cobertura >= 
 uv run ruff check . && uv run ruff format --check .   # lint y formato
 ```
 
+La CI (`.github/workflows/ci.yml`) corre además, en cada push: el build de la
+imagen con smoke test, `trufflehog` (secretos en el historial) y `pip-audit`
+(desarrollo seguro: falla si alguna dependencia del `uv.lock` que va en la
+imagen tiene una vulnerabilidad conocida; mismo paso que pdf-extractext y
+document-store). Para correrlo local:
+
+```bash
+uv export --no-hashes --no-dev --no-emit-project --format requirements-txt -o requirements.txt
+uvx pip-audit -r requirements.txt --no-deps --disable-pip
+```
+
 | Suite | Carpeta | Qué prueba | Cómo |
 |---|---|---|---|
 | Unitarios | `tests/unit/` | Validador, loader, service (con stubs de los dos clients), clients (HTTP mockeado con **respx**), Retry, Bulkhead, config, wiring | sin I/O real |

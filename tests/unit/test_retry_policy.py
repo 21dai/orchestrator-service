@@ -29,11 +29,15 @@ def test_should_retry_exception(exc: Exception, expected: bool) -> None:
         # 5xx en métodos idempotentes: reintentar.
         ("GET", 500, True),
         ("GET", 502, True),
-        ("GET", 503, True),
         ("GET", 504, True),
-        ("HEAD", 503, True),
-        ("DELETE", 503, True),
-        ("PUT", 503, True),
+        ("HEAD", 500, True),
+        ("DELETE", 502, True),
+        ("PUT", 500, True),
+        # 503 nunca: es el circuito abierto en Traefik, MongoDB caído o la cola
+        # llena; reintentar enseguida no cambia nada y solo suma fallos.
+        ("GET", 503, False),
+        ("PUT", 503, False),
+        ("DELETE", 503, False),
         # POST no es idempotente: un 5xx puede haber procesado la request.
         ("POST", 503, False),
         ("POST", 500, False),

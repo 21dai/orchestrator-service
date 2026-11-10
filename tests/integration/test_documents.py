@@ -42,6 +42,12 @@ def problem(status: int, detail: str) -> httpx.Response:
     )
 
 
+# Así responde Traefik con el circuito abierto: 503 en texto plano, sin Retry-After.
+TRAEFIK_CIRCUITO_ABIERTO = httpx.Response(503, text="Service Unavailable")
+# Así responde Traefik cuando no puede conectar con el servicio (caído).
+TRAEFIK_SIN_CONEXION = httpx.Response(502, text="Bad Gateway")
+
+
 def mock_services(
     extract: httpx.Response | None = None,
 ) -> tuple[respx.Route, respx.Route]:
@@ -206,8 +212,10 @@ def test_post_documents_propaga_el_rechazo_de_pdf_extractext_sin_guardar(
         (httpx.Response(500, text="boom"), 502),
         (httpx.Response(200, json={"content": "sin page_count"}), 502),
         (httpx.Response(503, text="no available server"), 503),
+        (TRAEFIK_CIRCUITO_ABIERTO, 503),
+        (TRAEFIK_SIN_CONEXION, 503),
     ],
-    ids=["5xx", "respuesta-invalida", "sin-replicas"],
+    ids=["5xx", "respuesta-invalida", "sin-replicas", "circuito-abierto", "traefik-sin-conexion"],
 )
 @respx.mock
 def test_post_documents_informa_las_fallas_de_pdf_extractext_sin_guardar(
@@ -270,8 +278,18 @@ def test_post_documents_reenvia_la_sobrecarga_de_pdf_extractext_con_retry_after(
         ({"return_value": problem(400, "Datos inválidos: checksum")}, 502),
         ({"side_effect": httpx.ConnectError("refused")}, 503),
         ({"side_effect": httpx.ReadTimeout("timeout")}, 504),
+        ({"return_value": TRAEFIK_CIRCUITO_ABIERTO}, 503),
+        ({"return_value": TRAEFIK_SIN_CONEXION}, 503),
     ],
-    ids=["sin-base", "5xx", "contrato-roto", "caido", "timeout"],
+    ids=[
+        "sin-base",
+        "5xx",
+        "contrato-roto",
+        "caido",
+        "timeout",
+        "circuito-abierto",
+        "traefik-sin-conexion",
+    ],
 )
 @respx.mock
 def test_post_documents_informa_las_fallas_de_document_store(
@@ -285,6 +303,33 @@ def test_post_documents_informa_las_fallas_de_document_store(
     assert response.status_code == expected_status
     assert response.headers["content-type"] == "application/problem+json"
     assert "document-store" in response.json()["detail"]
+
+
+# --- Circuito abierto en Traefik ---
+
+
+@pytest.mark.parametrize("service", ["pdf-extractext", "document-store"])
+@respx.mock
+def test_el_circuito_abierto_en_traefik_llega_como_503_problem_details_sin_retry_after(
+    client: TestClient, service: str
+) -> None:
+    # Con el circuito abierto Traefik corta en el acto con un 503 sin Retry-After:
+    # el cliente recibe un 503 Problem Details y no un "reintentar en N s".
+    if service == "pdf-extractext":
+        respx.post(EXTRACT_URL).mock(return_value=TRAEFIK_CIRCUITO_ABIERTO)
+        respx.post(STORE_URL).mock(side_effect=stored)
+    else:
+        respx.post(EXTRACT_URL).mock(return_value=httpx.Response(200, json=EXTRACT_RESPONSE))
+        respx.post(STORE_URL).mock(return_value=TRAEFIK_CIRCUITO_ABIERTO)
+
+    response = post_pdf(client, name="informe")
+
+    assert response.status_code == 503
+    assert response.headers["content-type"] == "application/problem+json"
+    assert "retry-after" not in response.headers
+    body = response.json()
+    assert body["status"] == 503
+    assert service in body["detail"]
 
 
 # --- Tamaño del PDF ---

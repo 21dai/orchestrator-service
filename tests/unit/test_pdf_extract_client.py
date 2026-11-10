@@ -122,12 +122,29 @@ async def test_extract_traduce_la_cola_llena_a_sobrecarga_con_retry_after() -> N
             {"return_value": httpx.Response(503, text="no available server")},
             PdfExtractUnavailableError,
         ),
+        # Traefik con el circuito abierto: 503 sin Retry-After.
+        (
+            {"return_value": httpx.Response(503, text="Service Unavailable")},
+            PdfExtractUnavailableError,
+        ),
+        # Traefik sin poder conectar con ninguna réplica.
+        (
+            {"return_value": httpx.Response(502, text="Bad Gateway")},
+            PdfExtractUnavailableError,
+        ),
         ({"side_effect": httpx.ConnectError("refused")}, PdfExtractUnavailableError),
         # Timeout de conexión: el hoja no está escuchando, no está lento.
         ({"side_effect": httpx.ConnectTimeout("timeout")}, PdfExtractUnavailableError),
         ({"side_effect": httpx.ReadTimeout("timeout")}, PdfExtractTimeoutError),
     ],
-    ids=["503-sin-retry-after", "sin-conexion", "timeout-de-conexion", "timeout"],
+    ids=[
+        "503-sin-retry-after",
+        "circuito-abierto",
+        "traefik-sin-conexion",
+        "sin-conexion",
+        "timeout-de-conexion",
+        "timeout",
+    ],
 )
 @respx.mock
 async def test_extract_traduce_las_caidas(

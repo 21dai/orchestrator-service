@@ -474,6 +474,30 @@ async def test_las_operaciones_idempotentes_reintentan_un_5xx(method, url, ok, o
 
 
 @respx.mock
+async def test_las_operaciones_idempotentes_no_reintentan_el_circuito_abierto() -> None:
+    # 503 de Traefik con el circuito abierto: reintentar enseguida no sirve.
+    route = respx.get(DOCUMENT_URL).mock(
+        return_value=httpx.Response(503, text="Service Unavailable")
+    )
+
+    async with make_client(retry_policy=NO_BACKOFF) as client:
+        with pytest.raises(DocumentStoreUnavailableError):
+            await client.get_document(7)
+
+    assert route.call_count == 1
+
+
+@respx.mock
+async def test_un_502_de_traefik_es_servicio_no_disponible() -> None:
+    # Traefik responde 502 cuando no puede conectar con document-store.
+    respx.post(DOCUMENTS_URL).mock(return_value=httpx.Response(502, text="Bad Gateway"))
+
+    async with make_client() as client:
+        with pytest.raises(DocumentStoreUnavailableError, match="document-store"):
+            await client.create_document(NEW_DOCUMENT)
+
+
+@respx.mock
 async def test_el_alta_no_reintenta_un_5xx() -> None:
     # Un POST que falló con 5xx pudo haber guardado igual: reintentarlo daría un 409.
     route = respx.post(DOCUMENTS_URL).mock(return_value=httpx.Response(500, text="boom"))

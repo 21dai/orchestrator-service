@@ -140,9 +140,9 @@ async def test_request_no_reintenta_un_timeout_de_lectura() -> None:
 @respx.mock
 async def test_request_reintenta_5xx_solo_en_metodos_idempotentes() -> None:
     get_route = respx.get(f"{BASE_URL}/health").mock(
-        side_effect=[httpx.Response(503), httpx.Response(200)]
+        side_effect=[httpx.Response(500), httpx.Response(200)]
     )
-    post_route = respx.post(f"{BASE_URL}/api/v1/documents").mock(return_value=httpx.Response(503))
+    post_route = respx.post(f"{BASE_URL}/api/v1/documents").mock(return_value=httpx.Response(500))
 
     async with BaseClient(BASE_URL, timeout_seconds=5, retry_policy=NO_BACKOFF) as client:
         get_response = await client._request("GET", "/health")
@@ -150,18 +150,18 @@ async def test_request_reintenta_5xx_solo_en_metodos_idempotentes() -> None:
 
     assert get_response.status_code == 200
     assert get_route.call_count == 2
-    assert post_response.status_code == 503
+    assert post_response.status_code == 500
     assert post_route.call_count == 1
 
 
 @respx.mock
 async def test_request_devuelve_el_ultimo_5xx_si_se_agotan_los_intentos() -> None:
-    route = respx.get(f"{BASE_URL}/health").mock(return_value=httpx.Response(503))
+    route = respx.get(f"{BASE_URL}/health").mock(return_value=httpx.Response(500))
 
     async with BaseClient(BASE_URL, timeout_seconds=5, retry_policy=NO_BACKOFF) as client:
         response = await client._request("GET", "/health")
 
-    assert response.status_code == 503
+    assert response.status_code == 500
     assert route.call_count == 3
 
 

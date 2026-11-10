@@ -11,6 +11,9 @@ y termina en 400 por checksum duplicado. Por eso la regla es conservadora:
   NO se reintentan: la request ya salió y puede haberse procesado.
 - Un 5xx se reintenta solo en métodos idempotentes (GET, HEAD, PUT, DELETE,
   OPTIONS); en POST podría duplicar trabajo.
+- Un 503 nunca: es el circuito abierto en Traefik, document-store sin MongoDB
+  o la cola llena de pdf-extractext. Reintentarlo enseguida no cambia nada y
+  le suma fallos al circuit breaker de Traefik.
 - Los 4xx nunca: son errores del pedido, no del servicio.
 """
 
@@ -57,6 +60,8 @@ class RetryPolicy:
         return isinstance(exc, RETRYABLE_EXCEPTIONS)
 
     def should_retry_response(self, method: str, status_code: int) -> bool:
+        if status_code == httpx.codes.SERVICE_UNAVAILABLE:
+            return False
         return status_code >= 500 and method.upper() in IDEMPOTENT_METHODS
 
     def delay(self, attempt: int) -> float:

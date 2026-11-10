@@ -2,7 +2,6 @@ import httpx
 
 from app.clients.base_client import BaseClient, UpstreamErrors, error_detail
 from app.exceptions import (
-    PdfExtractCircuitOpenError,
     PdfExtractOverloadedError,
     PdfExtractRejectedError,
     PdfExtractTimeoutError,
@@ -18,7 +17,6 @@ ERRORS = UpstreamErrors(
     service="pdf-extractext",
     unavailable=PdfExtractUnavailableError,
     timeout=PdfExtractTimeoutError,
-    circuit_open=PdfExtractCircuitOpenError,
     overloaded=PdfExtractOverloadedError,
     unexpected=PdfExtractUnexpectedResponseError,
 )

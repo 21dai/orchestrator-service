@@ -7,7 +7,6 @@ from app.clients.base_client import BaseClient, UpstreamErrors, error_detail
 from app.exceptions import (
     DocumentAlreadyExistsError,
     DocumentNotFoundError,
-    DocumentStoreCircuitOpenError,
     DocumentStoreOverloadedError,
     DocumentStoreRejectedError,
     DocumentStoreTimeoutError,
@@ -30,7 +29,6 @@ ERRORS = UpstreamErrors(
     service="document-store",
     unavailable=DocumentStoreUnavailableError,
     timeout=DocumentStoreTimeoutError,
-    circuit_open=DocumentStoreCircuitOpenError,
     overloaded=DocumentStoreOverloadedError,
     unexpected=DocumentStoreUnexpectedResponseError,
 )

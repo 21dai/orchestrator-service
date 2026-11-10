@@ -11,7 +11,6 @@ from fastapi.testclient import TestClient
 from app.errors import register_error_handlers
 from app.exceptions import (
     DocumentAlreadyExistsError,
-    DocumentStoreCircuitOpenError,
     DocumentStoreOverloadedError,
     DocumentStoreRejectedError,
     DocumentStoreTimeoutError,
@@ -19,7 +18,6 @@ from app.exceptions import (
     DocumentStoreUnexpectedResponseError,
     InvalidPdfError,
     OrchestratorError,
-    PdfExtractCircuitOpenError,
     PdfExtractOverloadedError,
     PdfExtractRejectedError,
     PdfExtractTimeoutError,
@@ -46,7 +44,6 @@ def make_client(exc: OrchestratorError) -> TestClient:
         (PdfExtractRejectedError("checksum duplicado"), 400),
         (PdfExtractUnexpectedResponseError("respuesta rara"), 502),
         (PdfExtractUnavailableError("no conecta"), 503),
-        (PdfExtractCircuitOpenError("circuito abierto"), 503),
         (PdfExtractOverloadedError("bulkhead lleno"), 503),
         (PdfExtractTimeoutError("tardó demasiado"), 504),
     ],
@@ -164,7 +161,6 @@ def test_sin_retry_after_no_se_agrega_el_header() -> None:
         (DocumentStoreRejectedError("datos inválidos"), 502),
         (DocumentStoreUnexpectedResponseError("respuesta rara"), 502),
         (DocumentStoreUnavailableError("no conecta"), 503),
-        (DocumentStoreCircuitOpenError("circuito abierto"), 503),
         (DocumentStoreOverloadedError("bulkhead lleno"), 503),
         (DocumentStoreTimeoutError("tardó demasiado"), 504),
     ],

@@ -7,7 +7,7 @@ from app.main import app
 def test_el_client_de_pdf_extractext_se_crea_al_arrancar_la_app() -> None:
     """Regresión: si el client se creara perezosamente en la primera request,
     varias requests simultáneas construirían cada una el suyo (lru_cache no es
-    atómico entre hilos) y Circuit Breaker y Bulkhead no compartirían estado."""
+    atómico entre hilos) y el Bulkhead no compartiría estado."""
     get_pdf_extract_client.cache_clear()
 
     with TestClient(app):

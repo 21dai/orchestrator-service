@@ -6,13 +6,11 @@ import pytest
 import respx
 
 from app.clients.bulkhead import Bulkhead
-from app.clients.circuit_breaker import CircuitBreaker, CircuitState
 from app.clients.document_store_client import DocumentStoreClient
 from app.clients.retry import RetryPolicy
 from app.exceptions import (
     DocumentAlreadyExistsError,
     DocumentNotFoundError,
-    DocumentStoreCircuitOpenError,
     DocumentStoreOverloadedError,
     DocumentStoreRejectedError,
     DocumentStoreTimeoutError,
@@ -188,39 +186,12 @@ async def test_create_document_traduce_los_fallos_de_red(
             await client.create_document(NEW_DOCUMENT)
 
 
-@respx.mock
-async def test_create_document_traduce_el_circuito_abierto_con_retry_after() -> None:
-    respx.post(DOCUMENTS_URL).mock(side_effect=httpx.ConnectError("refused"))
-    breaker = CircuitBreaker(failure_threshold=1, recovery_timeout_seconds=30)
-
-    async with make_client(circuit_breaker=breaker) as client:
-        with pytest.raises(DocumentStoreUnavailableError):
-            await client.create_document(NEW_DOCUMENT)
-        with pytest.raises(DocumentStoreCircuitOpenError, match="temporalmente") as caught:
-            await client.create_document(NEW_DOCUMENT)
-
-    assert caught.value.retry_after_seconds == pytest.approx(30, abs=1)
-
-
 async def test_create_document_traduce_el_bulkhead_lleno() -> None:
     bulkhead = Bulkhead(max_concurrent=1, max_waiting=0, acquire_timeout_seconds=1)
     async with bulkhead.slot():  # alguien más ya ocupa el único slot
         async with make_client(bulkhead=bulkhead) as client:
             with pytest.raises(DocumentStoreOverloadedError, match="en curso"):
                 await client.create_document(NEW_DOCUMENT)
-
-
-@respx.mock
-async def test_un_409_no_cuenta_como_fallo_para_el_circuit_breaker() -> None:
-    respx.post(DOCUMENTS_URL).mock(return_value=problem(409, "duplicado"))
-    breaker = CircuitBreaker(failure_threshold=1, recovery_timeout_seconds=30)
-
-    async with make_client(circuit_breaker=breaker) as client:
-        for _ in range(3):
-            with pytest.raises(DocumentAlreadyExistsError):
-                await client.create_document(NEW_DOCUMENT)
-
-    assert breaker.state is CircuitState.CLOSED
 
 
 # --- CRUD: GET, PUT y DELETE de un documento, y la lista -----------------------

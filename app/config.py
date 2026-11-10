@@ -28,13 +28,14 @@ class Settings(BaseSettings):
     graceful_shutdown_seconds: int = 60
 
     # URL base del microservicio de extracción de texto (pdf-extractext).
-    # Local: la API corre en :8000. En Docker resuelve por nombre de servicio
-    # dentro de la red compartida, p. ej. PDF_EXTRACT_BASE_URL=http://pdf-extractext:8000
+    # Local: la API corre en :8000. En el stack es el entrypoint interno de
+    # Traefik (PDF_EXTRACT_BASE_URL=http://traefik:8081), que balancea entre las
+    # réplicas y aplica el circuit breaker (ADR-0005).
     pdf_extract_base_url: str = "http://localhost:8000"
 
     # URL base del microservicio que persiste los documentos (document-store).
-    # Local corre en :8002 (pdf-extractext usa :8000 y el orquestador :8001). En Docker,
-    # DOCUMENT_STORE_BASE_URL=http://document-store:8000
+    # Local corre en :8002 (pdf-extractext usa :8000 y el orquestador :8001). En
+    # el stack también pasa por Traefik: DOCUMENT_STORE_BASE_URL=http://traefik:8081
     document_store_base_url: str = "http://localhost:8002"
 
     # Timeout de lectura/escritura (en segundos) de cada microservicio.
@@ -55,17 +56,11 @@ class Settings(BaseSettings):
     http_connect_timeout_seconds: float = 2.0
 
     # Retry (ver app/clients/retry.py). Solo se reintentan fallos de conexión
-    # y 5xx en métodos idempotentes: máximo de intentos (contando el primero)
-    # y espera exponencial con jitter, en segundos.
+    # y 5xx (salvo 503) en métodos idempotentes: máximo de intentos (contando
+    # el primero) y espera exponencial con jitter, en segundos.
     retry_max_attempts: int = 3
     retry_backoff_seconds: float = 0.2
     retry_max_backoff_seconds: float = 2.0
-
-    # Circuit Breaker (ver app/clients/circuit_breaker.py): fallos consecutivos
-    # (errores de transporte, timeouts, 5xx) para abrir el circuito, y segundos
-    # que permanece abierto antes de probar una llamada (half-open).
-    circuit_breaker_failure_threshold: int = 5
-    circuit_breaker_recovery_seconds: float = 30.0
 
     # Bulkhead (ver app/clients/bulkhead.py): requests en vuelo hacia el hoja,
     # cuántas pueden esperar un lugar y por cuántos segundos. Peor caso en

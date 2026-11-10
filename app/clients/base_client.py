@@ -6,7 +6,6 @@ import httpx
 from pydantic import BaseModel, ValidationError
 
 from app.clients.bulkhead import Bulkhead, BulkheadFullError
-from app.clients.circuit_breaker import CircuitBreaker, CircuitOpenError
 from app.clients.retry import RetryPolicy
 from app.exceptions import OrchestratorError
 
@@ -25,7 +24,6 @@ class UpstreamErrors:
     service: str
     unavailable: type[OrchestratorError]
     timeout: type[OrchestratorError]
-    circuit_open: type[OrchestratorError]
     overloaded: type[OrchestratorError]
     unexpected: type[OrchestratorError]
 
@@ -51,27 +49,16 @@ def error_detail(response: httpx.Response) -> str:
     return response.text
 
 
-def is_load_shedding(response: httpx.Response) -> bool:
-    """503 con `Retry-After`: el servicio está sano pero con la cola llena.
-
-    Es como responde pdf-extractext cuando no da abasto (backpressure). No es
-    una falla: abrir el circuito por esto cortaría un servicio sano justo
-    cuando hay más demanda.
-    """
-    return (
-        response.status_code == httpx.codes.SERVICE_UNAVAILABLE
-        and retry_after_seconds(response) is not None
-    )
-
-
 class BaseClient:
     """Cliente HTTP base para comunicarse con otro microservicio.
 
     Un cliente concreto por microservicio extiende esta clase e implementa
     únicamente sus propios endpoints, siempre a través de `_request`: es el
     único punto por donde salen requests del orquestador, así que los
-    patrones de resiliencia (Retry, Circuit Breaker, Bulkhead) y la
-    observabilidad se aplican ahí sin tocar los services.
+    patrones de resiliencia que quedan en el código (Retry y Bulkhead) y la
+    observabilidad se aplican ahí sin tocar los services. El Circuit Breaker
+    está en Traefik (ADR-0005): en el stack, las requests salen hacia su
+    entrypoint interno.
 
     Se instancia una vez por ciclo de vida de la app (no por request) y se
     cierra con `aclose()` o usándolo como context manager asíncrono.
@@ -83,7 +70,6 @@ class BaseClient:
         timeout_seconds: float,
         connect_timeout_seconds: float | None = None,
         retry_policy: RetryPolicy | None = None,
-        circuit_breaker: CircuitBreaker | None = None,
         bulkhead: Bulkhead | None = None,
     ) -> None:
         # El timeout de conexión puede ser más corto que el de lectura: si el
@@ -95,7 +81,6 @@ class BaseClient:
             timeout = httpx.Timeout(timeout_seconds, connect=connect_timeout_seconds)
         self._client = httpx.AsyncClient(base_url=base_url, timeout=timeout)
         self._retry_policy = retry_policy
-        self._circuit_breaker = circuit_breaker
         self._bulkhead = bulkhead
 
     @property
@@ -106,11 +91,10 @@ class BaseClient:
         """Envía una request al microservicio y devuelve la respuesta cruda.
 
         `path` se resuelve contra `base_url`. Aplica la política de Retry si
-        hay una configurada; cada intento pasa por el Circuit Breaker (si
-        está abierto se corta con `CircuitOpenError`, que no se reintenta).
-        Los errores de transporte y los timeouts de httpx se propagan tal
-        cual (después de agotar los reintentos): cada cliente concreto decide
-        cómo traducirlos a excepciones de dominio.
+        hay una configurada; cada intento pasa por el Bulkhead. Los errores
+        de transporte y los timeouts de httpx se propagan tal cual (después
+        de agotar los reintentos): cada cliente concreto decide cómo
+        traducirlos a excepciones de dominio.
         """
         if self._retry_policy is None:
             return await self._send(method, path, **kwargs)
@@ -148,49 +132,15 @@ class BaseClient:
             attempt += 1
 
     async def _send(self, method: str, path: str, **kwargs: Any) -> httpx.Response:
-        """Un intento real de request, protegido por Circuit Breaker y Bulkhead.
+        """Un intento real de request, protegido por el Bulkhead.
 
-        Orden: primero el breaker (si el circuito está abierto se rechaza sin
-        ocupar un slot ni esperar), después el Bulkhead (acota las requests en
-        vuelo y en espera) y recién entonces la red. Para el breaker cuentan
-        como fallo las excepciones de httpx (transporte y timeouts) y las
-        respuestas 5xx; un 4xx es una respuesta válida del servicio, así que
-        cuenta como éxito. No cuentan ni el rechazo del Bulkhead ni un 503 con
-        `Retry-After` (cola llena, ver `is_load_shedding`): el hoja no falló.
-
-        Si esta request es la llamada de prueba del half-open y termina sin
-        resultado (la rechaza el Bulkhead o se cancela), se libera en el
-        `finally` para que el circuito no quede trabado.
+        El Bulkhead acota las requests en vuelo y en espera (los PDFs en
+        memoria de este proceso); recién con un lugar libre sale a la red.
         """
-        breaker = self._circuit_breaker
-        is_trial = breaker.before_request() if breaker is not None else False
-
-        try:
-            if self._bulkhead is None:
-                return await self._send_tracked(breaker, method, path, **kwargs)
-            async with self._bulkhead.slot():
-                return await self._send_tracked(breaker, method, path, **kwargs)
-        finally:
-            if is_trial and breaker is not None:
-                breaker.release_trial()
-
-    async def _send_tracked(
-        self, breaker: CircuitBreaker | None, method: str, path: str, **kwargs: Any
-    ) -> httpx.Response:
-        try:
-            response = await self._client.request(method, path, **kwargs)
-        except Exception:
-            if breaker is not None:
-                breaker.record_failure()
-            raise
-        if breaker is not None:
-            if is_load_shedding(response):
-                pass  # ni éxito ni fallo; si era la prueba, la libera `_send`
-            elif response.is_server_error:
-                breaker.record_failure()
-            else:
-                breaker.record_success()
-        return response
+        if self._bulkhead is None:
+            return await self._client.request(method, path, **kwargs)
+        async with self._bulkhead.slot():
+            return await self._client.request(method, path, **kwargs)
 
     async def _call(
         self, errors: UpstreamErrors, method: str, path: str, **kwargs: Any
@@ -206,12 +156,6 @@ class BaseClient:
         except BulkheadFullError as exc:
             raise errors.overloaded(
                 f"Demasiadas solicitudes en curso hacia {service}; reintentar más tarde."
-            ) from exc
-        except CircuitOpenError as exc:
-            raise errors.circuit_open(
-                f"{service} está temporalmente deshabilitado por fallos repetidos; "
-                f"reintentar en {exc.retry_after_seconds:.0f} s.",
-                retry_after_seconds=exc.retry_after_seconds,
             ) from exc
         except httpx.ConnectTimeout as exc:
             # Es un timeout, pero de conexión: el servicio no está escuchando.

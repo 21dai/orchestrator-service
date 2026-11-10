@@ -6,7 +6,6 @@ from typing import Annotated
 from fastapi import Depends
 
 from app.clients.bulkhead import Bulkhead
-from app.clients.circuit_breaker import CircuitBreaker
 from app.clients.document_store_client import DocumentStoreClient
 from app.clients.pdf_extract_client import PdfExtractClient
 from app.clients.retry import RetryPolicy
@@ -21,14 +20,6 @@ def build_retry_policy(settings: Settings) -> RetryPolicy:
         max_attempts=settings.retry_max_attempts,
         backoff_seconds=settings.retry_backoff_seconds,
         max_backoff_seconds=settings.retry_max_backoff_seconds,
-    )
-
-
-def build_circuit_breaker(settings: Settings, name: str) -> CircuitBreaker:
-    return CircuitBreaker(
-        failure_threshold=settings.circuit_breaker_failure_threshold,
-        recovery_timeout_seconds=settings.circuit_breaker_recovery_seconds,
-        name=name,
     )
 
 
@@ -54,7 +45,6 @@ def get_pdf_extract_client() -> PdfExtractClient:
         timeout_seconds=settings.pdf_extract_timeout_seconds,
         connect_timeout_seconds=settings.http_connect_timeout_seconds,
         retry_policy=build_retry_policy(settings),
-        circuit_breaker=build_circuit_breaker(settings, name="pdf-extractext"),
         bulkhead=build_bulkhead(settings, name="pdf-extractext"),
     )
 
@@ -67,10 +57,10 @@ async def close_pdf_extract_client() -> None:
 
 @lru_cache
 def get_document_store_client() -> DocumentStoreClient:
-    """Un único client por proceso, con su propio Circuit Breaker y Bulkhead.
+    """Un único client por proceso, con su propio Bulkhead.
 
-    Separados de los de pdf-extractext: si un servicio falla, no se corta el
-    tráfico hacia el otro. Se crea y se cierra en el lifespan, como aquel.
+    Separado del de pdf-extractext: si un servicio se satura, no ocupa los
+    lugares del otro. Se crea y se cierra en el lifespan, como aquel.
     """
     settings = get_settings()
     return DocumentStoreClient(
@@ -78,7 +68,6 @@ def get_document_store_client() -> DocumentStoreClient:
         timeout_seconds=settings.document_store_timeout_seconds,
         connect_timeout_seconds=settings.http_connect_timeout_seconds,
         retry_policy=build_retry_policy(settings),
-        circuit_breaker=build_circuit_breaker(settings, name="document-store"),
         bulkhead=build_bulkhead(settings, name="document-store"),
     )
 

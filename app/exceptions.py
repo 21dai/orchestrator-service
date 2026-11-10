@@ -50,15 +50,15 @@ class PdfExtractUnexpectedResponseError(PdfExtractError):
 
 
 class PdfExtractUnavailableError(PdfExtractError):
-    """No se pudo conectar con pdf-extractext, o no quedan réplicas sanas (503 sin Retry-After)."""
+    """pdf-extractext no está disponible.
+
+    No se pudo conectar, no quedan réplicas sanas o el circuito está abierto en
+    Traefik (502, o 503 sin Retry-After).
+    """
 
 
 class PdfExtractTimeoutError(PdfExtractError):
     """pdf-extractext no respondió dentro del timeout configurado."""
-
-
-class PdfExtractCircuitOpenError(PdfExtractError):
-    """pdf-extractext está temporalmente deshabilitado: el circuit breaker está abierto."""
 
 
 class PdfExtractOverloadedError(PdfExtractError):
@@ -98,15 +98,15 @@ class DocumentStoreUnexpectedResponseError(DocumentStoreError):
 
 
 class DocumentStoreUnavailableError(DocumentStoreError):
-    """No se pudo conectar con document-store, o su base de datos no responde (503)."""
+    """document-store no está disponible.
+
+    No se pudo conectar, su base de datos no responde o el circuito está
+    abierto en Traefik (502, o 503 sin Retry-After).
+    """
 
 
 class DocumentStoreTimeoutError(DocumentStoreError):
     """document-store no respondió dentro del timeout configurado."""
-
-
-class DocumentStoreCircuitOpenError(DocumentStoreError):
-    """document-store está temporalmente deshabilitado: el circuit breaker está abierto."""
 
 
 class DocumentStoreOverloadedError(DocumentStoreError):

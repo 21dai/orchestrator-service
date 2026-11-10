@@ -5,10 +5,8 @@ import pytest
 import respx
 
 from app.clients.bulkhead import Bulkhead
-from app.clients.circuit_breaker import CircuitBreaker
 from app.clients.pdf_extract_client import PdfExtractClient
 from app.exceptions import (
-    PdfExtractCircuitOpenError,
     PdfExtractOverloadedError,
     PdfExtractRejectedError,
     PdfExtractTimeoutError,
@@ -155,22 +153,6 @@ async def test_extract_traduce_las_caidas(
     async with PdfExtractClient(base_url=BASE_URL, timeout_seconds=5) as client:
         with pytest.raises(expected, match="pdf-extractext"):
             await client.extract(make_document())
-
-
-@respx.mock
-async def test_extract_traduce_el_circuito_abierto_e_informa_cuando_reintentar() -> None:
-    respx.post(EXTRACT_URL).mock(side_effect=httpx.ConnectError("refused"))
-    breaker = CircuitBreaker(failure_threshold=1, recovery_timeout_seconds=30)
-
-    async with PdfExtractClient(
-        base_url=BASE_URL, timeout_seconds=5, circuit_breaker=breaker
-    ) as client:
-        with pytest.raises(PdfExtractUnavailableError):
-            await client.extract(make_document())
-        with pytest.raises(PdfExtractCircuitOpenError, match="temporalmente") as caught:
-            await client.extract(make_document())
-
-    assert caught.value.retry_after_seconds == pytest.approx(30, abs=1)
 
 
 async def test_extract_traduce_el_bulkhead_lleno() -> None:

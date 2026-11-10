@@ -43,19 +43,6 @@ async def test_get_pdf_extract_client_aplica_la_politica_de_retry_configurada() 
     get_pdf_extract_client.cache_clear()
 
 
-async def test_get_pdf_extract_client_tiene_su_propio_circuit_breaker() -> None:
-    client = get_pdf_extract_client()
-
-    assert client._circuit_breaker is not None
-    assert (
-        client._circuit_breaker.failure_threshold
-        == get_settings().circuit_breaker_failure_threshold
-    )
-
-    await client.aclose()
-    get_pdf_extract_client.cache_clear()
-
-
 async def test_get_pdf_extract_client_tiene_su_propio_bulkhead() -> None:
     client = get_pdf_extract_client()
 
@@ -94,10 +81,8 @@ async def test_get_document_store_client_tiene_su_propia_resiliencia() -> None:
     extractor = get_pdf_extract_client()
     settings = get_settings()
 
-    # Un breaker y un bulkhead por microservicio: si document-store se cae,
-    # no se corta la extracción, y al revés.
-    assert store._circuit_breaker is not None
-    assert store._circuit_breaker is not extractor._circuit_breaker
+    # Un bulkhead por microservicio: si document-store se satura, no ocupa los
+    # lugares de la extracción, y al revés.
     assert store._bulkhead is not None
     assert store._bulkhead is not extractor._bulkhead
     assert store._retry_policy is not None

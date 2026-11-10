@@ -21,7 +21,6 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from app.exceptions import (
     DocumentAlreadyExistsError,
     DocumentNotFoundError,
-    DocumentStoreCircuitOpenError,
     DocumentStoreOverloadedError,
     DocumentStoreRejectedError,
     DocumentStoreTimeoutError,
@@ -30,7 +29,6 @@ from app.exceptions import (
     InvalidDocumentNameError,
     InvalidPdfError,
     OrchestratorError,
-    PdfExtractCircuitOpenError,
     PdfExtractOverloadedError,
     PdfExtractRejectedError,
     PdfExtractTimeoutError,
@@ -51,7 +49,6 @@ STATUS_BY_EXCEPTION: dict[type[OrchestratorError], int] = {
     PdfExtractRejectedError: status.HTTP_400_BAD_REQUEST,
     PdfExtractUnexpectedResponseError: status.HTTP_502_BAD_GATEWAY,
     PdfExtractUnavailableError: status.HTTP_503_SERVICE_UNAVAILABLE,
-    PdfExtractCircuitOpenError: status.HTTP_503_SERVICE_UNAVAILABLE,
     PdfExtractOverloadedError: status.HTTP_503_SERVICE_UNAVAILABLE,
     PdfExtractTimeoutError: status.HTTP_504_GATEWAY_TIMEOUT,
     # El PDF ya estaba guardado: el cliente recibe un conflicto claro.
@@ -60,7 +57,6 @@ STATUS_BY_EXCEPTION: dict[type[OrchestratorError], int] = {
     DocumentStoreRejectedError: status.HTTP_502_BAD_GATEWAY,
     DocumentStoreUnexpectedResponseError: status.HTTP_502_BAD_GATEWAY,
     DocumentStoreUnavailableError: status.HTTP_503_SERVICE_UNAVAILABLE,
-    DocumentStoreCircuitOpenError: status.HTTP_503_SERVICE_UNAVAILABLE,
     DocumentStoreOverloadedError: status.HTTP_503_SERVICE_UNAVAILABLE,
     DocumentStoreTimeoutError: status.HTTP_504_GATEWAY_TIMEOUT,
 }

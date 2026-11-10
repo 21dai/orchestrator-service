@@ -18,10 +18,10 @@ from app.routers import documents, health
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """Ciclo de vida de la app.
 
-    Al arrancar crea los clients HTTP salientes, para que Retry, Circuit
-    Breaker y Bulkhead existan una sola vez por proceso antes de la primera
-    request (si se crearan perezosamente, varias requests simultáneas podrían
-    construir cada una su propio client). Al apagar, los cierra.
+    Al arrancar crea los clients HTTP salientes, para que Retry y Bulkhead
+    existan una sola vez por proceso antes de la primera request (si se
+    crearan perezosamente, varias requests simultáneas podrían construir cada
+    una su propio client). Al apagar, los cierra.
     """
     get_pdf_extract_client()
     get_document_store_client()

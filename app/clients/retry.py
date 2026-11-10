@@ -1,9 +1,17 @@
 """Política de reintentos para las llamadas salientes (patrón Retry).
 
-Qué se reintenta y qué no sale de las mediciones de carga sobre pdf-extractext
-(CONTEXTO, 2026-09-16): un POST que agota el timeout **igual crea el
-documento** en el hoja y deja el proceso ocupado; reintentarlo empeora la cola
-y termina en 400 por checksum duplicado. Por eso la regla es conservadora:
+Un POST que agotó el timeout no se reintenta, porque la request ya llegó y
+probablemente se está procesando:
+
+- hacia pdf-extractext, la extracción ya está consumiendo CPU en una réplica
+  (las mediciones de carga del 2026-09-16 muestran que sigue hasta terminar
+  aunque el cliente se haya ido); reintentar duplica el trabajo justo cuando
+  el servicio está saturado y alarga su cola;
+- hacia document-store, el documento pudo haberse guardado: el reintento
+  respondería 409 (checksum duplicado) en vez de 201.
+
+pdf-extractext no guarda nada desde su versión 2.0.0 (su ADR-0008); el que
+guarda es document-store (ADR-0003 de este repo). La regla es conservadora:
 
 - Se reintenta solo lo que seguro no llegó al servidor: fallos al conectar
   (`ConnectError`, `ConnectTimeout`).

@@ -10,8 +10,8 @@ from app.clients.retry import RetryPolicy
         # La conexión nunca se estableció: la request no llegó, reintentar es seguro.
         (httpx.ConnectError("refused"), True),
         (httpx.ConnectTimeout("timeout"), True),
-        # La request ya salió: el servidor puede estar procesándola (mediciones:
-        # un POST que agota el timeout igual crea el documento). No reintentar.
+        # La request ya salió: el servidor puede estar procesándola (pdf-extractext
+        # sigue extrayendo; document-store pudo haber guardado). No reintentar.
         (httpx.ReadTimeout("timeout"), False),
         (httpx.WriteTimeout("timeout"), False),
         (httpx.PoolTimeout("timeout"), False),

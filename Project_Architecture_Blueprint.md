@@ -254,7 +254,8 @@ Para agregar una operación orquestada (p. ej. "obtener resumen de pedido"):
 - Crear el client perezosamente en la primera request: varias requests simultáneas construirían cada
   una el suyo (`lru_cache` no es atómico entre hilos) y los patrones no compartirían estado.
 - Capturar excepciones de dominio en un router para armar la respuesta a mano (va en `errors.py`).
-- Reintentar timeouts de `POST` hacia pdf-extractext (el documento se crea igual; ver ADR-0002).
+- Reintentar timeouts de `POST`: pdf-extractext sigue extrayendo aunque el cliente se haya ido, y
+  document-store pudo haber guardado el documento (el reintento daría `409`); ver `retry.py`.
 
 ## 10. Decisiones arquitectónicas registradas
 

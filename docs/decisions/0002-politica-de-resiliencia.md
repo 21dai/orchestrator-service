@@ -2,7 +2,9 @@
 
 ## Estado
 
-Aceptado
+Aceptado. La sección *Circuit Breaker* fue reemplazada por el
+[ADR-0005](0005-circuit-breaker-en-traefik.md): el circuito ahora lo abre Traefik, y el
+Retry ya no reintenta un `503`.
 
 ## Fecha
 

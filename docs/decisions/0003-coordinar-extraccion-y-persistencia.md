@@ -46,10 +46,10 @@ Errores:
 - Otro 4xx de document-store → `502`: el orquestador ya validó los datos, así que es un
   contrato roto o una URL mal configurada, no un error del cliente.
 - Fallas de red, timeouts, circuito abierto o bulkhead lleno de cualquiera de los dos →
-  `503`/`504` con el nombre del servicio en el `detail` (ver ADR-0002).
+  `503`/`504` con el nombre del servicio en el `detail` (ver ADR-0002 y ADR-0005).
 
 Cada servicio tiene su URL (`PDF_EXTRACT_BASE_URL`, `DOCUMENT_STORE_BASE_URL`), su timeout y
-su propio Circuit Breaker y Bulkhead. La traducción de fallos común a los dos clients vive en
+su propio Bulkhead; desde el ADR-0005 el Circuit Breaker de cada uno está en Traefik. La traducción de fallos común a los dos clients vive en
 `BaseClient._call`; cada client solo resuelve lo propio de su contrato.
 
 ## Alternativas consideradas

@@ -7,8 +7,10 @@ renombrar y borrar), delegando en document-store, que no se publica por Traefik:
 es el único punto de entrada. No mantiene estado ni se conecta a bases de datos: extraer es
 trabajo de pdf-extractext y persistir, de document-store.
 
-Aplica los patrones de resiliencia **Retry**, **Circuit Breaker** y **Bulkhead** sobre las
-llamadas salientes, para que un microservicio lento o caído no arrastre al orquestador.
+Aplica los patrones de resiliencia **Retry** y **Bulkhead** sobre las llamadas salientes, que
+en el stack pasan por el entrypoint interno de Traefik, donde está el **Circuit Breaker**
+([ADR-0005](docs/decisions/0005-circuit-breaker-en-traefik.md)). Así un microservicio lento o
+caído no arrastra al orquestador.
 
 ## Índice
 
@@ -61,10 +63,12 @@ Router
        excepción de dominio a un Problem Details con el código HTTP que corresponde
 ```
 
-Cada llamada sale por `Retry → Circuit Breaker → Bulkhead → red`, con un breaker y un
-bulkhead **por microservicio**: si document-store se cae, la extracción no se corta, y al
-revés. Cada client traduce las respuestas y los fallos de su servicio (4xx, 5xx, timeout,
-sin conexión, circuito abierto, bulkhead lleno) a excepciones de dominio.
+Cada llamada sale por `Retry → Bulkhead → red`, con un bulkhead **por microservicio**: si
+document-store se satura, no ocupa los lugares de la extracción, y al revés. En el stack, la
+red es el entrypoint interno de Traefik (`http://traefik:8081`), que balancea entre las réplicas
+y aplica un circuit breaker por servicio. Cada client traduce las respuestas y los fallos de su
+servicio (4xx, 5xx, timeout, sin conexión, circuito abierto en Traefik, bulkhead lleno) a
+excepciones de dominio.
 
 No hace falta una Saga: `/extract` no guarda nada, así que si falla el guardado no queda
 nada a medias que compensar. El flujo y sus decisiones están en
@@ -213,10 +217,9 @@ document-store:
 | `409` | El PDF ya estaba guardado: document-store tiene un documento con el mismo checksum | `DocumentAlreadyExistsError` |
 | `413` | El PDF supera `MAX_PDF_SIZE_BYTES` (10 MB). Se corta sin terminar de leerlo | `PdfTooLargeError` |
 | `422` | Falta el campo `file`, el id no es un entero positivo, `skip`/`limit` fuera de rango, el `name` del `PUT` es inválido o trae campos extra, u otro error de validación de la request. No se llama a ningún servicio | — |
-| `502` | pdf-extractext o document-store respondió 5xx o un cuerpo que no se puede interpretar | `PdfExtractUnexpectedResponseError`, `DocumentStoreUnexpectedResponseError` |
+| `502` | pdf-extractext o document-store respondió otro 5xx o un cuerpo que no se puede interpretar | `PdfExtractUnexpectedResponseError`, `DocumentStoreUnexpectedResponseError` |
 | `502` | document-store rechazó los datos con otro 4xx: el orquestador ya los validó, así que es un contrato roto o una URL mal configurada | `DocumentStoreRejectedError` |
-| `503` | No se pudo conectar con el servicio (tras agotar los reintentos), no quedan réplicas sanas (503 de Traefik) o document-store no tiene MongoDB (503 sin `Retry-After`) | `PdfExtractUnavailableError`, `DocumentStoreUnavailableError` |
-| `503` + `Retry-After` | Circuit Breaker abierto: el servicio está deshabilitado temporalmente por fallos repetidos | `PdfExtractCircuitOpenError`, `DocumentStoreCircuitOpenError` |
+| `503` | No se pudo conectar con el servicio (tras agotar los reintentos), Traefik no pudo conectar con él (`502`), el circuito está abierto en Traefik o no quedan réplicas sanas (`503` de Traefik, sin `Retry-After`), o document-store no tiene MongoDB (`503` sin `Retry-After`) | `PdfExtractUnavailableError`, `DocumentStoreUnavailableError` |
 | `503` | Bulkhead lleno: demasiadas solicitudes en curso hacia ese servicio | `PdfExtractOverloadedError`, `DocumentStoreOverloadedError` |
 | `503` + `Retry-After` | El servicio tiene la cola llena (503 con `Retry-After`, como pdf-extractext): se reenvía su `Retry-After` | `PdfExtractOverloadedError`, `DocumentStoreOverloadedError` |
 | `504` | El servicio no respondió dentro de su timeout | `PdfExtractTimeoutError`, `DocumentStoreTimeoutError` |
@@ -241,16 +244,14 @@ Las variables desconocidas se ignoran.
 | `DEBUG` | `false` | `true` activa el reload de uvicorn. Solo para desarrollo |
 | `FORWARDED_ALLOW_IPS` | `127.0.0.1` | IPs o redes (CIDR) de las que se aceptan los headers `X-Forwarded-*`. Detrás de Traefik: la subred de la red del compose (p. ej. `172.28.0.0/16`) |
 | `GRACEFUL_SHUTDOWN_SECONDS` | `60` | Segundos que uvicorn espera las requests en curso al recibir `SIGTERM`. Menor que el `stop_grace_period` del compose |
-| `PDF_EXTRACT_BASE_URL` | `http://localhost:8000` | URL base de pdf-extractext. En Docker: `http://pdf-extractext:8000` (nombre de servicio) |
-| `DOCUMENT_STORE_BASE_URL` | `http://localhost:8002` | URL base de document-store. En Docker: `http://document-store:8000` |
+| `PDF_EXTRACT_BASE_URL` | `http://localhost:8000` | URL base de pdf-extractext. En el stack: `http://traefik:8081` (entrypoint interno de Traefik, con balanceo y circuit breaker) |
+| `DOCUMENT_STORE_BASE_URL` | `http://localhost:8002` | URL base de document-store. En el stack: `http://traefik:8081` |
 | `PDF_EXTRACT_TIMEOUT_SECONDS` | `30` | Timeout de lectura/escritura hacia pdf-extractext. Mayor que los 25 s en los que pdf-extractext responde 503 si no llega a extraer (`EXTRACT_MAX_WAIT_SECONDS`), para recibir ese 503 en vez de cortar una extracción que iba a terminar. Acepta también el nombre anterior, `HTTP_TIMEOUT_SECONDS` |
 | `DOCUMENT_STORE_TIMEOUT_SECONDS` | `5` | Timeout de lectura/escritura hacia document-store, que solo guarda un JSON |
 | `HTTP_CONNECT_TIMEOUT_SECONDS` | `2` | Timeout solo para conectar, el mismo para los dos: más corto, para fallar rápido si un servicio está caído |
 | `RETRY_MAX_ATTEMPTS` | `3` | Intentos máximos por llamada, contando el primero |
 | `RETRY_BACKOFF_SECONDS` | `0.2` | Base de la espera exponencial entre reintentos |
 | `RETRY_MAX_BACKOFF_SECONDS` | `2.0` | Tope de esa espera |
-| `CIRCUIT_BREAKER_FAILURE_THRESHOLD` | `5` | Fallos consecutivos para abrir el circuito |
-| `CIRCUIT_BREAKER_RECOVERY_SECONDS` | `30` | Segundos abierto antes de probar una llamada (half-open) |
 | `BULKHEAD_MAX_CONCURRENT` | `5` | Requests en vuelo hacia cada microservicio por proceso (un bulkhead por servicio) |
 | `BULKHEAD_MAX_WAITING` | `10` | Requests que pueden esperar un lugar |
 | `BULKHEAD_ACQUIRE_TIMEOUT_SECONDS` | `5` | Máximo de espera por un lugar |
@@ -289,7 +290,7 @@ uv run ruff check . && uv run ruff format --check .   # lint y formato
 
 | Suite | Carpeta | Qué prueba | Cómo |
 |---|---|---|---|
-| Unitarios | `tests/unit/` | Validador, loader, service (con stubs de los dos clients), clients (HTTP mockeado con **respx**), Retry, Circuit Breaker, Bulkhead, config, wiring | sin I/O real |
+| Unitarios | `tests/unit/` | Validador, loader, service (con stubs de los dos clients), clients (HTTP mockeado con **respx**), Retry, Bulkhead, config, wiring | sin I/O real |
 | Integración | `tests/integration/` | La app completa en memoria con `TestClient`: endpoints, handlers de error, lifespan; pdf-extractext y document-store simulados con respx | sin servicios externos |
 | Sistema | `tests/system/` | Punta a punta contra el stack real (Traefik + orquestador + pdf-extractext + document-store + MongoDB) | opt-in, ver abajo |
 
@@ -323,7 +324,7 @@ $env:RUN_SYSTEM_TESTS=1; $env:RUN_FAULT_TESTS=1; uv run pytest tests/system -o a
 | `RUN_FAULT_TESTS` | — | `1` habilita además los que detienen contenedores |
 | `ORCHESTRATOR_BASE_URL` | `https://orchestrator.proyecto.localhost` | Despliegue contra el que se prueba |
 | `INFRASTRUCTURE_DIR` | `../infrastructure` | Carpeta del `docker-compose.yml` del stack, donde se corre `docker compose` |
-| `CIRCUIT_BREAKER_RECOVERY_SECONDS` | `30` | El del orquestador desplegado: cuánto reintentar después de restaurar un servicio |
+| `TRAEFIK_CIRCUIT_SECONDS` | `40` | `fallbackduration` + `recoveryduration` del circuit breaker de Traefik: cuánto reintentar después de restaurar un servicio |
 
 ```bash
 # bash: el stack en otra carpeta
@@ -417,19 +418,23 @@ en la red); si no, las URLs que arma el orquestador salen con `http://` en lugar
 
 ## Resiliencia
 
-Los tres patrones viven en `app/clients/` y se aplican en `BaseClient._request`, el único
+Retry y Bulkhead viven en `app/clients/` y se aplican en `BaseClient._request`, el único
 punto por donde salen requests. Los services no saben que existen. Cada microservicio tiene
-su propio Circuit Breaker y Bulkhead. El detalle y las razones (basadas en mediciones de
-carga sobre pdf-extractext) están en [ADR-0002](docs/decisions/0002-politica-de-resiliencia.md).
+su propio Bulkhead. El **Circuit Breaker está en Traefik**, configurado con labels en el
+`docker-compose.yml` de `../infrastructure`: un solo circuito por servicio para todas las
+réplicas del orquestador ([ADR-0005](docs/decisions/0005-circuit-breaker-en-traefik.md)). El
+detalle y las razones (basadas en mediciones de carga sobre pdf-extractext) están en
+[ADR-0002](docs/decisions/0002-politica-de-resiliencia.md) y en el ADR-0005.
 
 | Patrón | Módulo | Qué hace | Por qué así |
 |---|---|---|---|
-| **Retry** | `retry.py` | Reintenta solo fallos de conexión y 5xx en métodos idempotentes; backoff exponencial con jitter | Un POST que agota el timeout puede haberse procesado igual: reintentarlo duplica la extracción o termina en 409 en document-store |
-| **Circuit Breaker** | `circuit_breaker.py` | Tras N fallos consecutivos (transporte, timeout, 5xx) rechaza en el acto; pasado el tiempo de recuperación deja pasar una llamada de prueba. Un 503 con `Retry-After` (cola llena del hoja) no cuenta como fallo | Seguir enviando PDFs a un hoja caído solo agranda su cola; uno sano pero ocupado ya se defiende solo |
+| **Retry** | `retry.py` | Reintenta solo fallos de conexión (con Traefik) y 5xx salvo `503` en métodos idempotentes; backoff exponencial con jitter. Una réplica caída la reintenta Traefik | Un POST que agota el timeout puede haberse procesado igual: reintentarlo duplica la extracción o termina en 409 en document-store |
+| **Circuit Breaker** | Traefik (`cb-extract`, `cb-document-store`) | Con más de 30 % de errores de red o 25 % de 5xx abre el circuito: responde `503` en el acto durante 30 s y después deja pasar tráfico de a poco. Para pdf-extractext el `503` (cola llena) no cuenta | Seguir enviando PDFs a un hoja caído solo agranda su cola; uno sano pero ocupado ya se defiende solo |
 | **Bulkhead** | `bulkhead.py` | Acota las requests en vuelo y en espera hacia cada microservicio; el exceso recibe 503 inmediato | Cada request retiene un PDF en memoria; sin tope, un hoja lento agota la memoria del orquestador |
 
-Orden por cada intento: `Retry → Circuit Breaker → Bulkhead → red`. Si el circuito está abierto
-no se ocupa un lugar en el Bulkhead ni se reintenta.
+Orden por cada intento: `Retry → Bulkhead → red (Traefik → circuit breaker → servicio)`. Con el
+circuito abierto Traefik responde `503` sin `Retry-After`; el orquestador no lo reintenta y
+responde `503` Problem Details.
 
 ## Arquitectura
 
@@ -439,7 +444,7 @@ Arquitectura de 3 capas con patrón MVC:
 |---|---|---|
 | Presentación | `app/routers/`, `app/schemas/`, `app/errors.py` | HTTP, validación de entrada (Pydantic), traducción de excepciones a Problem Details |
 | Aplicación | `app/services/` | Validación del PDF, conversión a `PdfDocument`, orquestación |
-| Infraestructura de salida | `app/clients/` | Clients HTTP (httpx) hacia cada microservicio; Retry, Circuit Breaker, Bulkhead |
+| Infraestructura de salida | `app/clients/` | Clients HTTP (httpx) hacia cada microservicio; Retry y Bulkhead |
 
 ```
 app/
@@ -451,7 +456,7 @@ app/
 ├── routers/   documents.py, health.py
 ├── schemas/   documents.py (PdfDocument, ProcessedDocument, DocumentUpdate), pdf_extract.py y document_store.py (contratos de los servicios)
 ├── services/  document_service.py, pdf_loader.py, pdf_validator.py
-└── clients/   base_client.py, pdf_extract_client.py, document_store_client.py, retry.py, circuit_breaker.py, bulkhead.py
+└── clients/   base_client.py, pdf_extract_client.py, document_store_client.py, retry.py, bulkhead.py
 ```
 
 - Detalle de capas, componentes y guía para agregar funcionalidad:

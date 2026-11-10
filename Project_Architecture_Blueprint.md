@@ -1,7 +1,8 @@
 # Project Architecture Blueprint — orchestrator-service
 
-> Fecha de generación: 2026-09-11 · Última actualización: 2026-09-19 · Estado: flujo de PDF
-> completo con Retry, Circuit Breaker y Bulkhead. Regenerar cuando la arquitectura evolucione.
+> Fecha de generación: 2026-09-11 · Última actualización: 2026-11-10 · Estado: flujo de PDF
+> completo con Retry y Bulkhead; el Circuit Breaker está en Traefik (ADR-0005). Regenerar cuando
+> la arquitectura evolucione.
 
 ## 1. Visión general
 
@@ -38,13 +39,12 @@ orchestrator-service/
 │   │   ├── pdf_loader.py        # load_pdf(): UploadFile → PdfDocument
 │   │   └── document_service.py  # DocumentService.process_pdf(): extraer y guardar
 │   └── clients/                 # Infraestructura de salida
-│       ├── base_client.py       # BaseClient: _request = Retry → Circuit Breaker → Bulkhead → red
+│       ├── base_client.py       # BaseClient: _request = Retry → Bulkhead → red (Traefik)
 │       ├── pdf_extract_client.py# PdfExtractClient.extract()
 │       ├── document_store_client.py # DocumentStoreClient: create, list, get, update y delete_document()
 │       ├── retry.py             # RetryPolicy
-│       ├── circuit_breaker.py   # CircuitBreaker (cerrado/abierto/half-open)
 │       └── bulkhead.py          # Bulkhead (en vuelo + cola acotada)
-├── docs/decisions/              # ADRs (0001 representación del PDF, 0002 resiliencia, 0003 extraer y guardar, 0004 imagen base)
+├── docs/decisions/              # ADRs (0001 representación del PDF, 0002 resiliencia, 0003 extraer y guardar, 0004 imagen base, 0005 circuit breaker en Traefik)
 ├── tests/
 │   ├── unit/                    # Tests aislados, sin I/O real (respx para HTTP)
 │   ├── integration/             # Tests de la app (FastAPI TestClient)
@@ -64,7 +64,7 @@ orchestrator-service/
 |---|---|---|---|
 | **Presentación** | `app/routers/`, `app/schemas/`, `app/errors.py` | Endpoints HTTP, validación de entrada/salida con Pydantic, traducción de excepciones a Problem Details | services |
 | **Aplicación** | `app/services/` | Validación y conversión del PDF, orquestación: coordinar clients y componer la respuesta | clients (vía `Protocol`) |
-| **Infraestructura (salida)** | `app/clients/` | Comunicación HTTP con cada microservicio; resiliencia (Retry, Circuit Breaker, Bulkhead) | httpx |
+| **Infraestructura (salida)** | `app/clients/` | Comunicación HTTP con cada microservicio; resiliencia (Retry y Bulkhead; el Circuit Breaker está en Traefik) | httpx |
 
 **Regla:** las dependencias apuntan siempre hacia adentro: `router → service → client`.
 Está prohibido que `clients/` importe de `services/` o `routers/`, o que un servicio acceda a HTTP directamente sin pasar por un client.
@@ -80,13 +80,14 @@ Cliente ─▶ Traefik ─▶ ┌───────────────�
                       │  Services (validar, convertir, orquestar)  │
                       │       │                                    │
                       │       ▼                                    │
-                      │  Clients: Retry → Circuit Breaker →        │
-                      │           Bulkhead → httpx                 │
-                      └───────┼─────────────────────┼──────────────┘
+                      │  Clients: Retry → Bulkhead → httpx         │
+                      └───────────────────┼────────────────────────┘
+                                          ▼
+                        Traefik :8081 (interno: balanceo + circuit breaker)
+                              │                     │
                               ▼                     ▼
                        pdf-extractext         document-store ─▶ MongoDB
                      (POST /extract)       (POST /api/v1/documents)
-              (resuelven por nombre de servicio en la red Docker)
 ```
 
 ### Diagrama de secuencia (`POST /api/v1/documents`)
@@ -97,7 +98,7 @@ Router → pdf_loader.load_pdf: lee bytes, validate_pdf(), arma PdfDocument   [4
 Router → DocumentService.process_pdf(document, name)
 Service → valida el nombre (máx. 255)                         [400]
 Service → PdfExtractClient.extract(document)
-Client  → pdf-extractext: POST /extract (multipart)            [Retry / CB / Bulkhead]
+Client  → Traefik → pdf-extractext: POST /extract (multipart) [Retry / Bulkhead; CB en Traefik]
 Client  → Service: ExtractionResult   | excepción PdfExtract*Error (no se guarda nada)
 Service → arma NewDocument (SHA-256 de los bytes, tamaño, nombre, texto, páginas)
 Service → DocumentStoreClient.create_document(new_document)
@@ -128,7 +129,7 @@ Traefik (el orquestador es el único punto de entrada).
 ### `app/config.py` — Settings
 `BaseSettings` (pydantic-settings) lee variables de entorno. `get_settings()` está cacheado con
 `lru_cache`. Contiene URLs base de los microservicios (`pdf_extract_base_url`,
-`document_store_base_url`), un timeout por microservicio y los parámetros de Retry, Circuit Breaker y Bulkhead. `extra="ignore"`: un `.env` compartido con
+`document_store_base_url`), un timeout por microservicio y los parámetros de Retry y Bulkhead. `extra="ignore"`: un `.env` compartido con
 variables de otros servicios no rompe el arranque. **Nunca** valores hardcodeados fuera de aquí.
 
 ### `app/dependencies.py` — Inyección de dependencias
@@ -136,17 +137,18 @@ Providers con `typing.Annotated[..., Depends(...)]` para usar en los routers
 (ej. `DocumentServiceDep`). `get_pdf_extract_client()` y `get_document_store_client()` son
 singletons por proceso (`lru_cache`) que **se crean en el lifespan al arrancar** y se cierran al
 apagar: los patrones de resiliencia tienen estado y deben ser uno solo por microservicio. Acá se construyen también las políticas
-(`build_retry_policy`, `build_circuit_breaker`, `build_bulkhead`) a partir de `Settings`.
+(`build_retry_policy`, `build_bulkhead`) a partir de `Settings`.
 
 ### `app/clients/base_client.py` — Cliente HTTP base
 Wrapper sobre `httpx.AsyncClient` con `base_url` y `timeout`. Cada microservicio coordinado tiene
 un cliente concreto que extiende `BaseClient` e implementa solo sus endpoints, siempre vía
-`_request`, el **único punto de salida**: `_request` = Retry → `_send` = Circuit Breaker → Bulkhead →
-red. Encima, `_call` traduce lo común a todos los servicios (fallos de red, timeout, circuito
-abierto, bulkhead lleno, 5xx, body inválido) con las excepciones que cada client declara en un
+`_request`, el **único punto de salida**: `_request` = Retry → `_send` = Bulkhead → red. Encima,
+`_call` traduce lo común a todos los servicios (fallos de red, timeout, bulkhead lleno, 5xx —el
+`502` y el `503` de Traefik son "no disponible"—, body inválido) con las excepciones que cada client declara en un
 `UpstreamErrors`; el client concreto (`PdfExtractClient`, `DocumentStoreClient`) solo resuelve lo
 propio de su contrato (el 2xx esperado y los 4xx). Política y valores:
-[ADR-0002](docs/decisions/0002-politica-de-resiliencia.md).
+[ADR-0002](docs/decisions/0002-politica-de-resiliencia.md) y
+[ADR-0005](docs/decisions/0005-circuit-breaker-en-traefik.md).
 
 ### `app/services/` — Orquestación
 Coordinan uno o más clients, agregan resultados y aplican reglas de composición. Reciben los
@@ -172,8 +174,9 @@ con las mismas reglas que document-store, para que un nombre inválido sea `422`
   mano en los routers. `app/errors.py` registra un handler por excepción (`STATUS_BY_EXCEPTION`) y los
   handlers de validación (422), `HTTPException` y fallback (500), todos en formato RFC 9457 Problem Details,
   el mismo que usa pdf-extractext. Los fallos del hoja usan códigos de gateway (502/503/504).
-- **Resiliencia:** Retry, Circuit Breaker y Bulkhead en `app/clients/`, aplicados en `BaseClient`; los
-  services no saben que existen. Parámetros por entorno. Ver [ADR-0002](docs/decisions/0002-politica-de-resiliencia.md).
+- **Resiliencia:** Retry y Bulkhead en `app/clients/`, aplicados en `BaseClient`; los services no saben
+  que existen. Parámetros por entorno. El Circuit Breaker lo aplica Traefik con labels del compose.
+  Ver [ADR-0002](docs/decisions/0002-politica-de-resiliencia.md) y [ADR-0005](docs/decisions/0005-circuit-breaker-en-traefik.md).
 - **Observabilidad:** las requests salientes pasan por `BaseClient`: el lugar correcto para logging,
   métricas y resiliencia. **Regla de diseño:** nada de observabilidad ad-hoc por endpoint.
 - **Health:** `GET /health` para orquestadores/balanceadores; usado también por el `HEALTHCHECK` del Dockerfile.
@@ -189,7 +192,8 @@ con las mismas reglas que document-store, para que un nombre inválido sea `422`
 Config: `pyproject.toml` (`testpaths`, `asyncio_mode = "auto"`, cobertura mínima 90 % con
 `pytest-cov`). Los tests de sistema quedan excluidos por defecto porque se saltean sin la variable de
 entorno y se corren con `-o addopts=""` para no aplicarles el umbral de cobertura. Los patrones de
-resiliencia se prueban sin dormir: `RetryPolicy` recibe `sleep`, `CircuitBreaker` recibe `clock`.
+resiliencia se prueban sin dormir: `RetryPolicy` recibe `sleep`. El circuit breaker de Traefik se
+prueba en los tests de sistema (`test_fault_tolerance_system.py`).
 
 ## 7. Despliegue
 
@@ -203,9 +207,10 @@ resiliencia se prueban sin dormir: `RetryPolicy` recibe `sleep`, `CircuitBreaker
 - El stack completo (Traefik + réplicas del orquestador + pdf-extractext + MongoDB) se levanta desde la
   carpeta hermana `../infrastructure` (`docker compose up -d --build`, `--scale orchestrator=N`).
   Traefik expone `https://orchestrator.proyecto.localhost` y balancea entre réplicas.
-- Los microservicios se resuelven por **nombre de servicio** en la red Docker
-  (`PDF_EXTRACT_BASE_URL=http://pdf-extractext:8000`); el orquestador solo conoce URLs inyectadas por entorno.
-- Cada réplica tiene su propio estado de Retry/Circuit Breaker/Bulkhead (sin estado compartido, por diseño).
+- Los microservicios se llaman a través del entrypoint interno de Traefik
+  (`PDF_EXTRACT_BASE_URL=http://traefik:8081`); el orquestador solo conoce URLs inyectadas por entorno.
+- Cada réplica tiene su propio estado de Retry/Bulkhead (sin estado compartido, por diseño); el circuito
+  de cada servicio es uno solo, en Traefik.
 
 ## 8. Stack tecnológico (deliberadamente mínimo)
 
@@ -218,7 +223,8 @@ resiliencia se prueban sin dormir: `RetryPolicy` recibe `sleep`, `CircuitBreaker
 | python-multipart | Parseo de `multipart/form-data` (lo exige FastAPI para `UploadFile`) | — |
 
 Dev: `pytest`, `pytest-asyncio`, `pytest-cov`, `respx` (mock HTTP), `ruff` (lint: E, F, I, UP, B, ASYNC).
-Resiliencia implementada a mano (sin tenacity/aiobreaker): ver ADR-0002.
+Retry y Bulkhead implementados a mano (sin tenacity): ver ADR-0002. El Circuit Breaker es de Traefik
+(ADR-0005).
 **No hay drivers de base de datos**: este servicio nunca toca una.
 
 ## 9. Guía para agregar funcionalidad nueva (blueprint de desarrollo)
@@ -227,7 +233,8 @@ Para agregar una operación orquestada (p. ej. "obtener resumen de pedido"):
 
 1. **Cliente** (`app/clients/`): si se llama a un microservicio nuevo, crear un cliente concreto
    extendiendo `BaseClient`, que use `_request` y traduzca errores HTTP/transporte a excepciones de
-   dominio (ver `pdf_extract_client.py` como modelo). Retry/CB/Bulkhead vienen gratis.
+   dominio (ver `pdf_extract_client.py` como modelo). Retry y Bulkhead vienen gratis; el circuit
+   breaker se agrega como router interno con su middleware en el compose de `../infrastructure`.
 2. **Excepciones** (`app/exceptions.py`) y su código HTTP en `STATUS_BY_EXCEPTION` (`app/errors.py`).
 3. **Schema** (`app/schemas/`): contrato del hoja (interno) y modelo de respuesta público (traducido).
 4. **Servicio** (`app/services/`): función/clase que coordina clients y compone el resultado.
@@ -255,12 +262,12 @@ Para agregar una operación orquestada (p. ej. "obtener resumen de pedido"):
 |---|---|---|
 | FastAPI + httpx async | Orquestador con muchas llamadas concurrentes en curso | Concurrencia eficiente sin hilos |
 | Sin base de datos | El orquestador no tiene estado propio | Simplicidad, hiper-escalable; todo el estado vive en los hojas |
-| Resiliencia centralizada en `BaseClient` | Retry/Circuit Breaker uniformes para todos los servicios | Un solo lugar para política de resiliencia |
+| Resiliencia centralizada en `BaseClient` | Retry/Bulkhead uniformes para todos los servicios | Un solo lugar para política de resiliencia |
 | `TestClient` para integración | Validar wiring sin servidor real | Tests rápidos deterministas |
 | Tests de sistema opt-in (`RUN_SYSTEM_TESTS`) | Requieren servicios reales | CI no falla por entorno no disponible |
 | PDF como `bytes` en memoria ([ADR-0001](docs/decisions/0001-representacion-interna-del-pdf.md)) | El hoja espera multipart; máximo 10 MB; sin estado | Sin Base64 ni streams; `PdfDocument` inmutable circula service → client |
 | Errores en RFC 9457 Problem Details | pdf-extractext ya usa ese formato | Un solo formato de error en todo el sistema; handlers centralizados en `errors.py` |
 | Retry solo de fallos de conexión, nunca timeouts de POST ([ADR-0002](docs/decisions/0002-politica-de-resiliencia.md)) | El hoja procesa igual una request cuyo cliente agotó el timeout | No se duplica trabajo ni se agranda la cola del hoja |
-| Circuit Breaker por microservicio, en proceso ([ADR-0002](docs/decisions/0002-politica-de-resiliencia.md)) | Timeouts consecutivos = hoja saturado | Deja de alimentar la cola del hoja; sin estado compartido entre réplicas |
+| Circuit Breaker en Traefik, uno por microservicio ([ADR-0005](docs/decisions/0005-circuit-breaker-en-traefik.md)) | Pedido de la cátedra; un breaker por réplica no se enteraba de los otros | Un solo circuito para todas las réplicas, configurado en el compose |
 | Bulkhead por microservicio ([ADR-0002](docs/decisions/0002-politica-de-resiliencia.md)) | Cada request retiene un PDF en memoria | Memoria y espera acotadas; el exceso recibe 503 inmediato |
-| Clients creados en el lifespan | `lru_cache` no es atómico ante requests simultáneas | Un solo client (y un solo estado de resiliencia) por proceso |
+| Clients creados en el lifespan | `lru_cache` no es atómico ante requests simultáneas | Un solo client (y un solo Bulkhead por servicio) por proceso |

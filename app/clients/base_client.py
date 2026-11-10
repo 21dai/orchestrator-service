@@ -227,9 +227,14 @@ class BaseClient:
 
         Un 503 con `Retry-After` es la cola del servicio llena: el cliente puede
         volver a intentar en ese tiempo. Sin `Retry-After`, el servicio no está
-        disponible (Traefik sin réplicas sanas, o document-store sin MongoDB).
+        disponible (circuito abierto en Traefik, Traefik sin réplicas sanas, o
+        document-store sin MongoDB). Un 502 lo arma Traefik cuando no puede
+        conectar con el servicio: tampoco está disponible. Ninguno de los dos
+        servicios responde 502 por sí mismo.
         """
         detail = error_detail(response)
+        if response.status_code == httpx.codes.BAD_GATEWAY:
+            raise errors.unavailable(f"{errors.service} no está disponible: {detail}")
         if response.status_code == httpx.codes.SERVICE_UNAVAILABLE:
             retry_after = retry_after_seconds(response)
             if retry_after is None:

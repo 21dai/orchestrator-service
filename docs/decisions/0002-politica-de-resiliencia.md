@@ -158,3 +158,24 @@ Con la integración de document-store (ADR-0003, issue #21):
   terminaría en `409`.
 - **document-store sin MongoDB responde `503` sin `Retry-After`**: el breaker lo cuenta
   como fallo (es una caída, no una carga pasajera) y el orquestador responde `503`.
+
+## Actualización (2026-11-10): el contexto cambió
+
+El *Contexto* y la tabla de Retry de arriba describen a pdf-extractext antes de su versión
+2.0.0, cuando su `POST /api/v1/documents` extraía **y guardaba** el documento. Ya no es así:
+
+- Desde el [ADR-0003](0003-coordinar-extraccion-y-persistencia.md) de este repo, el
+  orquestador extrae con `POST /extract` y guarda en **document-store**.
+- Desde el ADR-0008 de pdf-extractext (versión 2.0.0), pdf-extractext **no guarda nada**:
+  solo extrae. Un duplicado lo detecta document-store, que responde **`409`** (no `400`).
+
+La regla de no reintentar un timeout de `POST` se mantiene, con estos motivos:
+
+- hacia pdf-extractext, la extracción ya está consumiendo CPU en una réplica (sigue hasta
+  terminar aunque el cliente se haya ido): reintentar duplica el trabajo justo cuando está
+  saturado;
+- hacia document-store, el documento pudo haberse guardado: el reintento respondería `409` en
+  vez de `201`.
+
+El Circuit Breaker de este ADR fue reemplazado por el de Traefik
+([ADR-0005](0005-circuit-breaker-en-traefik.md)).

@@ -82,3 +82,5 @@ su propio Bulkhead; desde el ADR-0005 el Circuit Breaker de cada uno está en Tr
 - El CRUD de pdf-extractext ya no se usa desde el orquestador; retirarlo es otro issue del
   equipo, igual que agregar document-store al stack de `infrastructure`. Hasta entonces, el
   stack de Docker no tiene a quién mandarle el guardado y el flujo responde `503`.
+  *(Actualización 2026-11-10: las dos cosas ya están hechas. pdf-extractext retiró su CRUD y
+  MongoDB en la 2.0.0 —su ADR-0008— y solo extrae; document-store está en el stack.)*
